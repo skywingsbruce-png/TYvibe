@@ -89,6 +89,33 @@ but does not modify it.
 - Deferred to later phases entirely: redaction layer for an LLM view, opinion
   (Discord) import, frontend pages, and LLM provider routing.
 
+## Phase 1.5 — local reconciliation CLI
+
+Put your IBKR CSV under `data/private/` (git-ignored), then run:
+
+```
+vibe-trading options-studio reconcile --file data/private/my_statement.csv
+```
+
+- `--file` may be omitted if there is exactly one CSV under `data/private/`.
+- Optional: `--account-label acct-1`, `--out-dir <dir>`, `--no-write` (print
+  summary only, write nothing).
+
+It runs the read-only chain — parse → classify → static payoff risk → YAML
+rules — and writes two files to the git-ignored `data/private/outputs/`:
+
+- `portfolio_snapshot.json` — de-identified snapshot + risk + rules + warnings
+- `reconciliation_report.md` — human-readable report with parse counts,
+  underlyings/expiries, recognized strategies (with max loss / max profit /
+  breakevens), warnings (`unresolved_option` / `unsupported_asset_category` /
+  `duplicate_*`), the `ALLOW/WATCH/BLOCK` rule verdicts, and an explicit
+  "Cannot be verified" section (buying power, margin, multi-currency,
+  exercise/assignment, live Greeks/IV/prices).
+
+The command is local and read-only: it never contacts the network, an LLM, or a
+broker, and the report contains no account number, name, address, or raw trade
+description.
+
 ## Running the tests
 
 From the repo root, with the project venv:

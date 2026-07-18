@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from src.options_studio.models import PortfolioSnapshot
 
@@ -51,6 +52,38 @@ def get_snapshots_dir() -> Path:
     d = get_private_dir() / "snapshots"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def get_outputs_dir() -> Path:
+    """Return the directory holding generated reconciliation outputs.
+
+    Lives under ``data/private/`` so the git-ignore + local ``.gitignore`` (``*``)
+    cover it: reconciliation reports may echo position sizes and must never be
+    committed.
+    """
+    d = get_private_dir() / "outputs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def find_single_statement() -> Optional[Path]:
+    """Return the sole CSV under ``data/private/`` when exactly one exists.
+
+    Returns ``None`` when there are zero or multiple candidates, so the caller
+    can ask the user to pass ``--file`` explicitly. The ``outputs/`` and
+    ``snapshots/`` subdirectories are excluded from the scan.
+    """
+    private = get_private_dir()
+    excluded = {get_outputs_dir().resolve(), get_snapshots_dir().resolve(), get_statements_dir().resolve()}
+    candidates = [
+        p
+        for p in private.rglob("*.csv")
+        if p.parent.resolve() not in excluded
+    ]
+    # Also allow files placed directly under statements/.
+    candidates += [p for p in get_statements_dir().glob("*.csv")]
+    unique = sorted({p.resolve() for p in candidates})
+    return unique[0] if len(unique) == 1 else None
 
 
 def save_raw_statement(content: str, *, safe_name: str) -> Path:
