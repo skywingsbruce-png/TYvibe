@@ -1,0 +1,58 @@
+# Personal Options Risk Studio — hard risk rules (Phase 1).
+#
+# These thresholds are DEFAULTS chosen to be conservative for an individual
+# investor. Edit them to your own risk tolerance. The rules engine reads this
+# file at runtime; nothing here is hard-coded in Python/TypeScript.
+#
+# The rules engine holds veto power: its verdict (ALLOW / WATCH / BLOCK) always
+# outranks the LLM, memory, persona, or community sentiment. The
+# "real_trading_forbidden" rule is not configurable — the Studio is read-only
+# and fails closed if any real-trading toggle is on.
+
+version: 1
+
+limits:
+  # Maximum acceptable loss for a single strategy, in account base currency.
+  # Any defined-risk strategy whose max loss exceeds this is BLOCKed; any
+  # strategy with UNBOUNDED loss (e.g. a naked short call) is always BLOCKed
+  # because it exceeds every finite cap.
+  max_single_trade_loss: 500
+
+  zero_dte:
+    # Number of 0-DTE (expires today) option positions allowed. Default 0 means
+    # any 0-DTE position trips the rule.
+    max_positions: 0
+
+  # Strategies expiring within this many days are flagged for review (WATCH).
+  near_dte_days: 14
+
+  # Concentration is measured as a fraction of the portfolio's total defined
+  # max loss. 0.35 => a single underlying holding >35% of total defined risk
+  # is flagged.
+  single_underlying_concentration_pct: 0.35
+
+  # Combined defined-risk fraction across all symbols in one theme.
+  theme_concentration_pct: 0.50
+
+# Severity each rule emits when its threshold is crossed. Allowed values:
+# allow | watch | block. (real_trading_forbidden is always block and ignores
+# this section.)
+severity:
+  zero_dte_over_limit: block
+  near_dte: watch
+  per_trade_over_limit: block
+  underlying_over_limit: watch
+  theme_over_limit: watch
+
+# Correlated-name groups. Concentration is measured across the whole group so a
+# book that is "diversified" by ticker but not by theme is still flagged.
+themes:
+  memory_semiconductor:
+    label: Memory / Semiconductor
+    symbols: [SNDK, MU, DRAM, WDC, STX, NVDA, AMD, TSM, MRVL, SOXL, SOXX, SMH]
+  mega_cap_tech:
+    label: Mega-cap Tech
+    symbols: [AAPL, MSFT, GOOGL, GOOG, AMZN, META, NVDA, TSLA]
+  broad_index_etf:
+    label: Broad Index ETF
+    symbols: [SPY, QQQ, IWM, DIA, VOO, VTI]

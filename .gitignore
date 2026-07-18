@@ -43,6 +43,9 @@ wiki/.cache/
 .cache/
 .remotion/
 
+# Options Risk Studio — raw private broker statements. NEVER commit these.
+data/private/
+
 # DuckDB data cache
 data/*.duckdb
 data/*.duckdb.wal
