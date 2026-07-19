@@ -30,7 +30,7 @@ from src.options_studio.classification import classify
 from src.options_studio.models import PortfolioSnapshot, StrategyType
 from src.options_studio.providers import MarketDataProvider, NullMarketDataProvider
 from src.options_studio.risk_engine import PortfolioRisk, analyze_portfolio
-from src.options_studio.rules_engine import RulesReport, Severity, evaluate, load_rules
+from src.options_studio.rules_engine import RuleMode, RulesReport, Severity, evaluate, load_rules
 
 #: Fields the Studio cannot verify from a statement alone. Surfaced verbatim in
 #: the report so the user never mistakes "not shown" for "checked and fine".
@@ -79,9 +79,24 @@ def run_reconciliation(
     parsed: ParseResult = parse_statement(text, account_label=account_label)
     classified = classify(parsed.snapshot)
     portfolio_risk = analyze_portfolio(classified, provider)
-    rules_report = evaluate(portfolio_risk, rules)
 
     warnings = tuple(parsed.warnings) + _detect_duplicates(classified)
+    unresolved_positions = sum(
+        1 for w in warnings if w.code in {"unresolved_option", "unsupported_asset_category"}
+    )
+    duplicate_warnings = sum(1 for w in warnings if w.code in {"duplicate_position", "duplicate_trade"})
+
+    # REVIEW mode: a held position that is merely large is a WATCH exposure
+    # alert, not a BLOCK. Held BLOCKs are structural only (real-trading toggle,
+    # unbounded loss, or a materially incomplete portfolio from unparsed lines).
+    rules_report = evaluate(
+        portfolio_risk,
+        rules,
+        mode=RuleMode.REVIEW,
+        unresolved_positions=unresolved_positions,
+        duplicate_warnings=duplicate_warnings,
+    )
+
     report = _render_report(classified, portfolio_risk, rules_report, warnings)
     return ReconciliationResult(
         snapshot=classified,
@@ -231,6 +246,11 @@ def _render_report(
 
     # 5) Risk rules
     lines.append("## 5. Risk rules")
+    lines.append("")
+    lines.append("_Mode: **review** (held positions). A held position that merely exceeds your "
+                 "per-trade loss preference is a WATCH exposure alert, not a BLOCK. Held BLOCKs are "
+                 "structural only: real-trading toggle, unbounded loss, or a materially incomplete "
+                 "portfolio from unparsed positions._")
     lines.append("")
     lines.append(f"**Overall: {rules.overall.label}**")
     lines.append("")

@@ -1,0 +1,18 @@
+# Fully fictional proposed-trade definition (sample only).
+# A candidate MSFT bull-call debit spread. Premiums marked verified_quote.
+label: MSFT 400/420 bull call debit spread
+legs:
+  - underlying: MSFT
+    right: call
+    strike: 400
+    expiry: 2026-02-20
+    quantity: 1
+    premium: 15.00
+    price_basis: verified_quote
+  - underlying: MSFT
+    right: call
+    strike: 420
+    expiry: 2026-02-20
+    quantity: -1
+    premium: 6.00
+    price_basis: verified_quote

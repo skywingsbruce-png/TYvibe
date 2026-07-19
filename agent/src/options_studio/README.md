@@ -116,6 +116,64 @@ The command is local and read-only: it never contacts the network, an LLM, or a
 broker, and the report contains no account number, name, address, or raw trade
 description.
 
+## Phase 1.6 — held-book review vs. proposed-trade authorization
+
+Two clearly separated surfaces (both local, read-only, never an order):
+
+### `review` (held positions)
+
+```
+vibe-trading options-studio review --file data/private/ibkr_statement.csv
+```
+
+(`reconcile` is a backward-compatible alias.) Reviews what you **already hold**.
+Semantics that matter here:
+
+- A held position that merely exceeds your personal `max_single_trade_loss`
+  preference is a **WATCH exposure alert, not a BLOCK** — you cannot be blocked
+  out of a position you already own.
+- Held **BLOCK** is reserved for structural problems only: the real-trading
+  toggle, an **unbounded-loss** position, or a **materially incomplete
+  portfolio** (an `unresolved_option` / `unsupported_asset_category` line means
+  real exposure is missing, so the aggregate can't be trusted — fix the parser
+  first).
+
+### `propose` (candidate new trade)
+
+```
+vibe-trading options-studio propose \
+  --file data/private/ibkr_statement.csv \
+  --trade data/private/my_candidate.yaml
+```
+
+Authorizes a **candidate new trade** you have not taken yet, writing
+`proposal_card.md` + `proposal_card.json` to `data/private/outputs/`. Here:
+
+- The `max_single_trade_loss` cap **is** a hard **BLOCK** — the whole point is to
+  stop a bad new trade before it is placed.
+- The candidate is kept strictly separate from the held book (distinct JSON
+  sections, position counts never merged), and the card shows the incremental
+  before → after portfolio impact.
+
+Proposed-trade file (`--trade`), YAML or JSON — each premium carries a
+`price_basis`:
+
+```yaml
+label: MSFT 400/420 bull call debit spread
+legs:
+  - {underlying: MSFT, right: call, strike: 400, expiry: 2026-02-20, quantity: 1,  premium: 15.00, price_basis: verified_quote}
+  - {underlying: MSFT, right: call, strike: 420, expiry: 2026-02-20, quantity: -1, premium: 6.00,  price_basis: verified_quote}
+```
+
+`price_basis` provenance gates approval:
+
+- `verified_quote` — from a traceable real quote; eligible for ALLOW.
+- `user_estimate` — hand-entered/assumed; usable for a hypothetical payoff, but
+  the candidate is **WATCH at best, never ALLOW**, and the report flags "assumed
+  price". (A premium with no explicit `price_basis` defaults to `user_estimate`.)
+- `unknown` — no premium; **nothing is fabricated** (payoff / IV / Greeks stay
+  unavailable) and the candidate cannot be ALLOW.
+
 ## Running the tests
 
 From the repo root, with the project venv:
@@ -127,7 +185,9 @@ From the repo root, with the project venv:
   agent/tests/test_options_studio_classification.py \
   agent/tests/test_options_studio_risk_engine.py \
   agent/tests/test_options_studio_guard.py \
-  agent/tests/test_options_studio_rules.py -q
+  agent/tests/test_options_studio_rules.py \
+  agent/tests/test_options_studio_cli.py \
+  agent/tests/test_options_studio_review_propose.py -q
 
 .venv/Scripts/python -m ruff check agent/src/options_studio agent/tests/test_options_studio_*.py
 ```
