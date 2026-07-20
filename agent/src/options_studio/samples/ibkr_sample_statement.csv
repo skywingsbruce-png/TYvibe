@@ -1,0 +1,32 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers (FICTIONAL SAMPLE - NOT REAL DATA)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,2026-01-15
+Statement,Data,WhenGenerated,2026-01-15 20:00:00 EST
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U0000000-FICTIONAL
+Account Information,Data,Name,SAMPLE ONLY - NOT A REAL PERSON
+Account Information,Data,Base Currency,USD
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Underlying,Multiplier,Expiry,Type,Strike
+Financial Instrument Information,Data,Equity and Index Options,MSFT 260220C00400000,MSFT 20FEB26 400 C,MSFT,100,2026-02-20,C,400
+Financial Instrument Information,Data,Equity and Index Options,MSFT 260220C00420000,MSFT 20FEB26 420 C,MSFT,100,2026-02-20,C,420
+Financial Instrument Information,Data,Equity and Index Options,MU 260220P00090000,MU 20FEB26 90 P,MU,100,2026-02-20,P,90
+Financial Instrument Information,Data,Equity and Index Options,AAPL 260220C00200000,AAPL 20FEB26 200 C,AAPL,100,2026-02-20,C,200
+Financial Instrument Information,Data,Equity and Index Options,GOOGL 270618C00150000,GOOGL 18JUN27 150 C,GOOGL,100,2027-06-18,C,150
+Financial Instrument Information,Data,Equity and Index Options,SNDK 260123P00080000,SNDK 23JAN26 80 P,SNDK,100,2026-01-23,P,80
+Financial Instrument Information,Data,Equity and Index Options,SNDK 260123P00075000,SNDK 23JAN26 75 P,SNDK,100,2026-01-23,P,75
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Value
+Open Positions,Data,Summary,Stocks,USD,AAPL,200,1,150,44000
+Open Positions,Data,Summary,Equity and Index Options,USD,MSFT 260220C00400000,1,100,15.00,1500
+Open Positions,Data,Summary,Equity and Index Options,USD,MSFT 260220C00420000,-1,100,6.00,-600
+Open Positions,Data,Summary,Equity and Index Options,USD,MU 260220P00090000,-1,100,3.00,-300
+Open Positions,Data,Summary,Equity and Index Options,USD,AAPL 260220C00200000,-1,100,8.00,-800
+Open Positions,Data,Summary,Equity and Index Options,USD,GOOGL 270618C00150000,1,100,80.00,8000
+Open Positions,Data,Summary,Equity and Index Options,USD,SNDK 260123P00080000,-1,100,4.50,-450
+Open Positions,Data,Summary,Equity and Index Options,USD,SNDK 260123P00075000,1,100,2.50,250
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Comm/Fee
+Trades,Data,Order,Stocks,USD,AAPL,"2026-01-05, 10:31:00",200,150.00,-1.00
+Trades,Data,Order,Equity and Index Options,USD,MU 260220P00090000,"2026-01-06, 09:45:00",-1,3.00,-0.65
+Trades,Data,Order,Equity and Index Options,USD,MSFT 260220C00400000,"2026-01-06, 11:15:00",1,15.00,-0.65
+Cash Report,Header,Currency Summary,Currency,Total
+Cash Report,Data,Ending Cash,USD,20000

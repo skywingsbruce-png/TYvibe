@@ -174,6 +174,25 @@ legs:
 - `unknown` — no premium; **nothing is fabricated** (payoff / IV / Greeks stay
   unavailable) and the candidate cannot be ALLOW.
 
+## Phase 2 v0 — web dashboard (read-only)
+
+A first read-only dashboard is wired into the Vibe Web UI at **`/options-studio`**
+(sidebar: "Options Studio"). It shows the held-book review: parse summary,
+recognized strategies (max loss / max profit / breakevens / DTE), concentration,
+near-DTE risk, the `ALLOW/WATCH/BLOCK` rule verdicts, and warnings.
+
+- Backend route: `GET /options-studio/review` (in `src/api/options_studio_routes.py`)
+  returns the de-identified reconciliation payload — your real
+  `data/private/ibkr_statement.csv` if present, otherwise a bundled fictional
+  sample so the page renders before any real export exists (`data_source` field
+  flags which).
+- The page falls back to the bundled `frontend/public/options-studio-sample.json`
+  when the backend is not running, so it renders in a pure-frontend dev session
+  too.
+- Greeks / IV / prices display as **unavailable** (never simulated); the
+  `propose` authorization card is not yet in the UI (CLI only) — that is the next
+  Phase 2 step.
+
 ## Running the tests
 
 From the repo root, with the project venv:

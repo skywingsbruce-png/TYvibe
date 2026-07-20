@@ -274,6 +274,10 @@ from src.api.live_routes import (  # noqa: F401, E402
 from src.api.alpha_routes import register_alpha_routes  # noqa: E402
 register_alpha_routes(app)
 
+# --- Personal Options Risk Studio (local, read-only) ---
+from src.api.options_studio_routes import register_options_studio_routes  # noqa: E402
+register_options_studio_routes(app)
+
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)

@@ -14,6 +14,8 @@ const PROXY_PATHS = [
   "/live",
   "/upload",
   "/shadow-reports",
+  // Proxy ONLY the API subpath, not the SPA page route "/options-studio".
+  "/options-studio/review",
 ];
 
 export default defineConfig(({ mode }) => {

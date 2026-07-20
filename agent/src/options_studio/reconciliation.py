@@ -54,15 +54,22 @@ class ReconciliationResult:
     warnings: tuple[ParseWarning, ...]
     report_markdown: str
 
-    def snapshot_json(self) -> str:
-        """Return the de-identified snapshot as pretty JSON."""
-        payload = {
+    def to_payload(self) -> dict:
+        """Return the de-identified review payload (JSON-safe dict).
+
+        This is the single shape consumed by the JSON file, the API route, and
+        the frontend dashboard. It contains no account number, name, or address.
+        """
+        return {
             "snapshot": self.snapshot.to_dict(),
             "portfolio_risk": self.portfolio_risk.to_dict(),
             "rules": self.rules_report.to_dict(),
             "warnings": [w.to_dict() for w in self.warnings],
         }
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def snapshot_json(self) -> str:
+        """Return the de-identified snapshot as pretty JSON."""
+        return json.dumps(self.to_payload(), ensure_ascii=False, indent=2)
 
 
 def run_reconciliation(
