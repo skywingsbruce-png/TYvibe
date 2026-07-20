@@ -27,12 +27,14 @@ class NotesConfig:
     indices: frozenset[str]
     whitelist: frozenset[str]
     windows: dict[str, int]
+    theme_keywords: dict[str, tuple[str, ...]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "indices": sorted(self.indices),
             "whitelist_size": len(self.whitelist),
             "windows": dict(self.windows),
+            "theme_keywords": {k: list(v) for k, v in self.theme_keywords.items()},
         }
 
 
@@ -57,4 +59,14 @@ def load_config() -> NotesConfig:
             windows[key] = int(val)
         except (TypeError, ValueError):
             continue
-    return NotesConfig(indices=frozenset(indices), whitelist=frozenset(whitelist), windows=windows)
+    theme_keywords: dict[str, tuple[str, ...]] = {}
+    for key, values in (raw.get("theme_keywords") or {}).items():
+        kws = tuple(str(v).strip() for v in (values or []) if str(v).strip())
+        if kws:
+            theme_keywords[str(key)] = kws
+    return NotesConfig(
+        indices=frozenset(indices),
+        whitelist=frozenset(whitelist),
+        windows=windows,
+        theme_keywords=theme_keywords,
+    )

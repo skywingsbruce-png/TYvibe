@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  Layers,
   Link2,
   Loader2,
   Lock,
@@ -41,6 +42,43 @@ interface Note {
   outcome_1d: string;
   outcome_1w: string;
   outcome_1m: string;
+  theme_associations?: ThemeAssociation[];
+}
+
+interface ThemeAssociation {
+  theme_key: string;
+  label: string;
+  association_types: ("direct_symbol" | "configured_keyword")[];
+  matched_symbols: string[];
+  matched_keywords: string[];
+}
+
+interface ThemeSummary {
+  label: string;
+  members: string[];
+  note_count: number;
+  held_symbols: string[];
+  strategy_count: number;
+  earliest_expiry: string | null;
+  has_near_dte: boolean;
+}
+
+interface ImportStats {
+  files: {
+    file: string;
+    kind: string;
+    raw_messages: number;
+    structured_notes: number;
+    parseable_timestamps: number;
+    skipped: number;
+    skip_reasons: Record<string, number>;
+    channel_ref: string | null;
+    distinct_authors: number;
+  }[];
+  errors: { file: string; message: string }[];
+  totals: { files: number; raw_messages: number; structured_notes: number; parseable_timestamps: number; skipped: number };
+  authors: { distinct: number; per_author: { author_ref: string; messages: number }[] };
+  channels: { distinct: number; refs: string[] };
 }
 
 interface Citation {
@@ -99,6 +137,8 @@ interface Bundle {
   notes: Note[];
   current: CurrentCard;
   holdings: { data_source: string; as_of: string | null; by_symbol: Record<string, HoldingsEntry> };
+  themes?: Record<string, ThemeSummary>;
+  import_stats?: ImportStats;
   llm_enabled: boolean;
   llm_privacy: Privacy;
   note_count: number;
@@ -302,6 +342,16 @@ export function MarketNotes() {
         </div>
       </div>
 
+      {/* Import status (de-identified) */}
+      {data.import_stats && data.source_count > 0 && (
+        <ImportStatusCard stats={data.import_stats} />
+      )}
+
+      {/* Configured theme associations */}
+      {data.themes && Object.keys(data.themes).length > 0 && (
+        <ThemesCard themes={data.themes} />
+      )}
+
       {/* Current conclusions (time-windowed) */}
       <div className="rounded-lg border bg-card p-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -426,6 +476,26 @@ export function MarketNotes() {
                     <Field label="1d / 1w / 1m outcome" value={`${n.outcome_1d} / ${n.outcome_1w} / ${n.outcome_1m}`} />
                   </div>
 
+                  {(n.theme_associations?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground">Themes:</span>
+                      {n.theme_associations!.map((a) => (
+                        <span key={a.theme_key} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-xs">
+                          <Layers className="h-3 w-3 text-muted-foreground" />
+                          {a.label}
+                          {a.association_types.includes("direct_symbol") && (
+                            <span className="text-primary">· via {a.matched_symbols.join("/")}</span>
+                          )}
+                          {a.association_types.includes("configured_keyword") && (
+                            <span className="text-amber-600" title="configured theme association (not a direct mention)">
+                              · configured keyword: {a.matched_keywords.join("/")}
+                            </span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {heldSyms.map((sym) => {
                     const h = holdings[sym];
                     return (
@@ -474,6 +544,114 @@ function Field({ label, value }: { label: string; value: string }) {
     <div>
       <span className="text-muted-foreground">{label}: </span>
       <span className={cn(value === "unknown" || value === "unavailable" ? "text-muted-foreground/60 italic" : "font-medium")}>{value}</span>
+    </div>
+  );
+}
+
+function ImportStatusCard({ stats }: { stats: ImportStats }) {
+  const t = stats.totals;
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Import status (de-identified)</h2>
+      <div className="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
+        <Stat label="Files" value={t.files} />
+        <Stat label="Messages" value={t.raw_messages} />
+        <Stat label="Structured notes" value={t.structured_notes} />
+        <Stat label="Parseable times" value={t.parseable_timestamps} />
+        <Stat label="Skipped" value={t.skipped} />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-left uppercase tracking-wide text-muted-foreground">
+              <th className="p-2 font-medium">File</th>
+              <th className="p-2 font-medium">Kind</th>
+              <th className="p-2 text-right font-medium">Raw</th>
+              <th className="p-2 text-right font-medium">Notes</th>
+              <th className="p-2 text-right font-medium">Parse-time</th>
+              <th className="p-2 text-right font-medium">Skipped</th>
+              <th className="p-2 font-medium">Channel</th>
+              <th className="p-2 text-right font-medium">Authors</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.files.map((f) => (
+              <tr key={f.file} className="border-b last:border-0">
+                <td className="p-2 font-medium">{f.file}</td>
+                <td className="p-2">{f.kind}</td>
+                <td className="p-2 text-right tabular-nums">{f.raw_messages}</td>
+                <td className="p-2 text-right tabular-nums">{f.structured_notes}</td>
+                <td className="p-2 text-right tabular-nums">{f.parseable_timestamps}</td>
+                <td className="p-2 text-right tabular-nums">
+                  {f.skipped}
+                  {f.skipped > 0 && (
+                    <span className="ml-1 text-muted-foreground">({Object.keys(f.skip_reasons).join(", ")})</span>
+                  )}
+                </td>
+                <td className="p-2 font-mono text-[10px] text-muted-foreground">{f.channel_ref ?? "—"}</td>
+                <td className="p-2 text-right tabular-nums">{f.distinct_authors}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 text-xs text-muted-foreground">
+        Distinct authors: {stats.authors.distinct} · distinct channels: {stats.channels.distinct} · authors and channels
+        are shown as de-identified references only (no names, no account, no message text, no full path).
+      </div>
+      {stats.errors.length > 0 && (
+        <div className="mt-2 space-y-0.5 text-xs text-red-600 dark:text-red-400">
+          {stats.errors.map((e, i) => (
+            <div key={i}>
+              <AlertTriangle className="mr-1 inline h-3 w-3" /> {e.file}: {e.message}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border bg-background p-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-lg font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function ThemesCard({ themes }: { themes: Record<string, ThemeSummary> }) {
+  const entries = Object.entries(themes).sort((a, b) => b[1].note_count - a[1].note_count);
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <h2 className="mb-1 text-sm font-semibold text-muted-foreground">
+        Configured theme associations
+      </h2>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Themes reuse <code>config/market_radar.yaml</code>. Keyword links are a <strong>configured theme association</strong>,
+        never presented as a direct mention. Holdings shown are information only.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {entries.map(([key, s]) => (
+          <div key={key} className="rounded-md border p-3">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-primary" />
+              <span className="font-medium">{s.label}</span>
+              <span className="text-xs text-muted-foreground">· {s.note_count} note(s)</span>
+            </div>
+            {s.held_symbols.length > 0 ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Held in theme: <span className="font-medium text-foreground">{s.held_symbols.join(", ")}</span> ·{" "}
+                {s.strategy_count} strategy(ies) · earliest expiry {s.earliest_expiry ?? "—"}
+                {s.has_near_dte && <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-600">≤14 DTE</span>}
+              </div>
+            ) : (
+              <div className="mt-1 text-xs text-muted-foreground/60 italic">No current holdings in this theme.</div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

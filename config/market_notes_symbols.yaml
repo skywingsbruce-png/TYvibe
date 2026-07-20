@@ -52,3 +52,16 @@ windows:
   weeks_days: 30
   # Window applied to opinions whose horizon could not be determined.
   unknown_days: 7
+
+# Theme keyword hints for Market Notes. Theme DEFINITIONS (labels, symbols, ETFs)
+# are REUSED from config/market_radar.yaml — this section only maps a theme key
+# there to explicit keywords. A note is associated to a theme by keyword ONLY
+# when one of these configured keywords appears in the text; keywords are never
+# inferred by an LLM. A note is associated by "direct_symbol" when a ticker it
+# mentions belongs to that theme's symbols/ETFs. The two association types are
+# always reported separately and never conflated.
+theme_keywords:
+  semiconductors: [semiconductor, semiconductors, semis, chips, chip, memory, dram, hbm, foundry, wafer, 半导体, 芯片, 内存]
+  software: [software, saas]
+  mag7: [mag7, magnificent seven, mega-cap tech, mega cap tech]
+  optical_networking: [optical, transceiver, optics]
