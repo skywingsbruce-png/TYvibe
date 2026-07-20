@@ -358,13 +358,24 @@ def serve_main(argv: list[str] | None = None) -> int:
         print(f"[dev] Vite PID={vite_proc.pid}")
         print("[dev] Frontend: http://localhost:5173")
         print(f"[dev] API: http://localhost:{args.port}")
-    elif frontend_dist.exists():
+    else:
+        from src.api.frontend_build import frontend_build_status
+
+        build = frontend_build_status(frontend_dist, frontend_root / "src")
+        if build.state == "missing":
+            # Do not serve: there is nothing current to serve. Fail loudly with
+            # a build hint instead of a silent blank/old page.
+            print(f"[error] {build.message}")
+            print("[error] Refusing to start without a frontend build. "
+                  "Build it (above) or use --dev for the Vite dev server.")
+            return 2
+        if build.state == "stale":
+            # Serve, but never silently: the operator is told the page is old.
+            print(f"[warn] {build.message}")
+            print("[warn] Serving the STALE build; rebuild to see current source.")
         if not any(getattr(route, "path", None) == "/" for route in app.routes):
             app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
-        print(f"[prod] Frontend served from {frontend_dist}")
-    else:
-        print(f"[warn] No frontend build found at {frontend_dist}")
-        print("[warn] Run: cd frontend && npm run build")
+        print(f"[prod] Frontend served from {frontend_dist} ({build.state})")
 
     print("=" * 50)
     print("  Vibe-Trading Server")

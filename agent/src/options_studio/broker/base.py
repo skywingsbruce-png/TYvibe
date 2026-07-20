@@ -116,12 +116,23 @@ def list_parsers() -> list[BrokerStatementParser]:
     return list(_REGISTRY)
 
 
+def strip_bom(text: str) -> str:
+    """Remove a leading UTF-8 BOM.
+
+    IBKR (and Excel round-trips) can prepend a BOM. Left in place it would
+    corrupt the first CSV header cell and silently drop that section — the exact
+    "quietly incomplete" failure this project must never produce.
+    """
+    return text.lstrip("﻿")
+
+
 def get_parser_for(text: str) -> BrokerStatementParser:
     """Return the first registered parser that recognizes ``text``.
 
     Raises:
         ParseError: If no registered parser accepts the text.
     """
+    text = strip_bom(text)
     for parser in _REGISTRY:
         try:
             if parser.can_parse(text):
@@ -137,4 +148,5 @@ def get_parser_for(text: str) -> BrokerStatementParser:
 
 def parse_statement(text: str, *, account_label: str = "acct-1") -> ParseResult:
     """Auto-detect the format and parse ``text`` into a :class:`ParseResult`."""
+    text = strip_bom(text)
     return get_parser_for(text).parse(text, account_label=account_label)

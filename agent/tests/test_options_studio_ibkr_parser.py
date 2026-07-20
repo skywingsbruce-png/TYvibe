@@ -79,3 +79,19 @@ def test_flex_query_detected_and_parsed():
 def test_unknown_format_raises_parse_error():
     with pytest.raises(ParseError):
         parse_statement("just,some,random,text\n1,2,3,4\n")
+
+
+def test_utf8_bom_is_stripped_and_positions_still_parse():
+    # A leading UTF-8 BOM (common in Windows/Excel round-trips) must not silently
+    # drop the first section. Parse must still see the position + warn on MYSTERY9.
+    bom = "﻿"
+    text = bom + (
+        "Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Value\n"
+        "Open Positions,Data,Summary,Stocks,USD,AAPL,100,1,150,15000\n"
+        "Open Positions,Data,Summary,Equity and Index Options,USD,MYSTERY9,1,100,1.00,100\n"
+        "Cash Report,Header,Currency Summary,Currency,Total\n"
+        "Cash Report,Data,Ending Cash,USD,20000\n"
+    )
+    result = parse_statement(text)
+    assert any(u.symbol == "AAPL" and u.quantity == 100 for u in result.snapshot.underlyings)
+    assert "unresolved_option" in {w.code for w in result.warnings}

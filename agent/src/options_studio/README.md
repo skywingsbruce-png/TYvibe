@@ -174,24 +174,43 @@ legs:
 - `unknown` — no premium; **nothing is fabricated** (payoff / IV / Greeks stay
   unavailable) and the candidate cannot be ALLOW.
 
-## Phase 2 v0 — web dashboard (read-only)
+## Phase 2 v0 — web dashboard (read-only, production path)
 
-A first read-only dashboard is wired into the Vibe Web UI at **`/options-studio`**
-(sidebar: "Options Studio"). It shows the held-book review: parse summary,
-recognized strategies (max loss / max profit / breakevens / DTE), concentration,
-near-DTE risk, the `ALLOW/WATCH/BLOCK` rule verdicts, and warnings.
+A read-only dashboard is wired into the Vibe Web UI at **`/options-studio`**
+(sidebar: "Options Studio"): parse summary, recognized strategies
+(max loss / max profit / breakevens / DTE), concentration, near-DTE risk, the
+`ALLOW/WATCH/BLOCK` rule verdicts, and warnings.
 
-- Backend route: `GET /options-studio/review` (in `src/api/options_studio_routes.py`)
-  returns the de-identified reconciliation payload — your real
-  `data/private/ibkr_statement.csv` if present, otherwise a bundled fictional
-  sample so the page renders before any real export exists (`data_source` field
-  flags which).
-- The page falls back to the bundled `frontend/public/options-studio-sample.json`
-  when the backend is not running, so it renders in a pure-frontend dev session
-  too.
-- Greeks / IV / prices display as **unavailable** (never simulated); the
-  `propose` authorization card is not yet in the UI (CLI only) — that is the next
-  Phase 2 step.
+Run it via the **official backend** (serves the built SPA + API on one origin):
+
+```
+cd frontend && npm run build        # produce frontend/dist
+cd .. && vibe-trading serve --port 8899
+# open http://127.0.0.1:8899/options-studio
+```
+
+The serve entry checks `frontend/dist` on startup: it **refuses to start** if the
+build is missing and prints a loud **STALE** warning (never silently serves an
+old page) if `frontend/src` is newer — see `src/api/frontend_build.py`.
+
+Backend route `GET /options-studio/review` (`src/api/options_studio_routes.py`)
+returns the de-identified payload with a strict data-safety contract:
+
+- **Sample only when there is no real file.** The bundled fictional sample is
+  derived at request time from `agent/src/options_studio/samples/ibkr_sample_statement.csv`
+  (the single source of truth — there is no duplicated JSON artifact).
+- **Real file present ⇒ `data_source="real"` always** — it never falls back to
+  the sample. If the statement fails to parse, or reconciliation surfaces a
+  risk-invalidating condition (`unresolved_option`, `unsupported_asset_category`,
+  `duplicate_position`, `duplicate_trade`, `cash_not_found`, or any
+  `unclassified` strategy), the response sets `risk_usable=false` with explicit
+  `blocking_issues`, and the UI shows a red **"真实数据不可用于风险汇总 / REAL DATA
+  NOT USABLE FOR RISK"** banner instead of numbers you shouldn't trust.
+- The **`SAMPLE DATA (fictional)`** banner is a persistent sticky bar, always
+  visible while scrolling.
+
+Greeks / IV / prices display as **unavailable** (never simulated). The `propose`
+authorization card is not yet in the UI (CLI only) — that is the next Phase 2 step.
 
 ## Running the tests
 
@@ -206,7 +225,9 @@ From the repo root, with the project venv:
   agent/tests/test_options_studio_guard.py \
   agent/tests/test_options_studio_rules.py \
   agent/tests/test_options_studio_cli.py \
-  agent/tests/test_options_studio_review_propose.py -q
+  agent/tests/test_options_studio_review_propose.py \
+  agent/tests/test_options_studio_api.py \
+  agent/tests/test_frontend_build_status.py -q
 
 .venv/Scripts/python -m ruff check agent/src/options_studio agent/tests/test_options_studio_*.py
 ```
