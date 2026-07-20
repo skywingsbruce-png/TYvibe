@@ -209,8 +209,17 @@ returns the de-identified payload with a strict data-safety contract:
 - The **`SAMPLE DATA (fictional)`** banner is a persistent sticky bar, always
   visible while scrolling.
 
-Greeks / IV / prices display as **unavailable** (never simulated). The `propose`
-authorization card is not yet in the UI (CLI only) — that is the next Phase 2 step.
+Greeks / IV / prices display as **unavailable** (never simulated).
+
+### Proposed-trade authorization card (in the UI)
+
+`/options-studio/propose` (linked from the review page) is a read-only pre-trade
+check: a leg-builder form POSTs the candidate to `POST /options-studio/propose`,
+which evaluates it against your held book and returns the authorization card —
+`ALLOW/WATCH/BLOCK` decision, price-basis banner (assumed / unavailable),
+candidate standalone risk, incremental held→after impact, and the candidate
+(PROPOSE) + portfolio-impact (REVIEW) rule tables. It never places an order. A
+premium marked `user_estimate` (or left blank ⇒ `unknown`) can never be ALLOW.
 
 ## Running the tests
 

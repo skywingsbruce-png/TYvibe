@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Loader2,
@@ -8,7 +8,10 @@ import {
   ShieldX,
   Layers,
   Ban,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +52,35 @@ interface Issue {
   context?: string;
 }
 
+interface OptionLegDetail {
+  quantity: number;
+  contract: {
+    underlying: string;
+    right: "call" | "put";
+    strike: number;
+    expiry: string;
+    multiplier: number;
+    average_cost: number | null;
+    market_value: number | null;
+  };
+}
+
+interface StockLegDetail {
+  symbol: string;
+  quantity: number;
+  average_cost: number | null;
+  market_value: number | null;
+}
+
+interface StrategyDetail {
+  strategy_id: string;
+  strategy_type: string;
+  underlying: string;
+  option_legs: OptionLegDetail[];
+  stock_legs: StockLegDetail[];
+  note: string | null;
+}
+
 interface ReviewPayload {
   data_source: "sample" | "real";
   risk_usable: boolean;
@@ -63,7 +95,7 @@ interface ReviewPayload {
     underlyings: unknown[];
     options: unknown[];
     trade_lots: unknown[];
-    strategies: unknown[];
+    strategies: StrategyDetail[];
   } | null;
   portfolio_risk: {
     total_defined_max_loss: number;
@@ -134,6 +166,15 @@ function humanType(t: string): string {
   return t.replace(/_/g, " ");
 }
 
+function signedQuantity(quantity: number): string {
+  return quantity > 0 ? `+${quantity}` : String(quantity);
+}
+
+function optionLegLabel(leg: OptionLegDetail): string {
+  const right = leg.contract.right === "call" ? "C" : "P";
+  return `${signedQuantity(leg.quantity)} ${right} ${leg.contract.strike} | ${leg.contract.expiry} | x${leg.contract.multiplier}`;
+}
+
 // Persistent, sticky top banner. Always visible while scrolling so the data
 // provenance (sample / real-unusable) can never be mistaken.
 function StickyBanner({ kind, children }: { kind: "sample" | "danger"; children: ReactNode }) {
@@ -160,6 +201,7 @@ export function OptionsStudio() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedStrategies, setExpandedStrategies] = useState<Set<string>>(new Set());
 
   async function load(mode: "initial" | "refresh" = "refresh") {
     if (mode === "initial") setLoading(true);
@@ -217,6 +259,16 @@ export function OptionsStudio() {
   const isSample = data.data_source === "sample";
   const realUnusable = data.data_source === "real" && !data.risk_usable;
   const { snapshot, portfolio_risk: risk, rules, warnings } = data;
+  const strategyDetails = new Map(snapshot?.strategies.map((strategy) => [strategy.strategy_id, strategy]));
+
+  function toggleStrategy(strategyId: string) {
+    setExpandedStrategies((current) => {
+      const next = new Set(current);
+      if (next.has(strategyId)) next.delete(strategyId);
+      else next.add(strategyId);
+      return next;
+    });
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -261,6 +313,12 @@ export function OptionsStudio() {
           >
             {isSample ? "SAMPLE DATA (fictional)" : realUnusable ? "REAL — NOT USABLE" : "Your data"}
           </span>
+          <Link
+            to="/options-studio/propose"
+            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <ShieldAlert className="h-3.5 w-3.5" /> Propose a trade
+          </Link>
           <button
             onClick={() => void load("refresh")}
             className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -362,9 +420,23 @@ export function OptionsStudio() {
                 <tbody>
                   {risk.strategies.map((s) => {
                     const near = s.dte !== null && s.dte <= 14 && s.dte >= 0;
+                    const detail = strategyDetails.get(s.strategy_id);
+                    const expanded = expandedStrategies.has(s.strategy_id);
                     return (
-                      <tr key={s.strategy_id} className="border-b last:border-0 hover:bg-muted/40">
-                        <td className="p-3 font-medium">{s.underlying}</td>
+                      <Fragment key={s.strategy_id}>
+                      <tr className="border-b hover:bg-muted/40">
+                        <td className="p-3 font-medium">
+                          <button
+                            type="button"
+                            onClick={() => toggleStrategy(s.strategy_id)}
+                            className="inline-flex items-center gap-1.5 text-left hover:text-primary"
+                            aria-expanded={expanded}
+                            aria-controls={`strategy-${s.strategy_id}`}
+                          >
+                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            {s.underlying}
+                          </button>
+                        </td>
                         <td className="p-3 capitalize">{humanType(s.strategy_type)}</td>
                         <td className="p-3">
                           <span className={cn("tabular-nums", near && "font-semibold text-amber-600")}>
@@ -386,6 +458,65 @@ export function OptionsStudio() {
                           {s.greeks.available ? "available" : "unavailable"}
                         </td>
                       </tr>
+                      {expanded && (
+                        <tr id={`strategy-${s.strategy_id}`} className="border-b bg-muted/25">
+                          <td colSpan={7} className="p-4">
+                            {!detail ? (
+                              <p className="text-sm text-amber-700 dark:text-amber-300">
+                                Strategy detail is unavailable. Reconcile the statement again before relying on this classification.
+                              </p>
+                            ) : (
+                              <div className="grid gap-4 lg:grid-cols-2">
+                                <div>
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Option legs ({detail.option_legs.length})
+                                  </p>
+                                  {detail.option_legs.length === 0 ? (
+                                    <p className="mt-2 text-sm text-muted-foreground">No option legs assigned.</p>
+                                  ) : (
+                                    <ul className="mt-2 space-y-1.5 text-sm">
+                                      {detail.option_legs.map((leg, index) => (
+                                        <li key={index} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                          <span className="font-mono font-medium">{optionLegLabel(leg)}</span>
+                                          <span className="text-xs text-muted-foreground">
+                                            avg cost {leg.contract.average_cost ?? "unavailable"} | market value {leg.contract.market_value ?? "unavailable"}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Stock legs ({detail.stock_legs.length})
+                                  </p>
+                                  {detail.stock_legs.length === 0 ? (
+                                    <p className="mt-2 text-sm text-muted-foreground">No shares assigned to this strategy.</p>
+                                  ) : (
+                                    <ul className="mt-2 space-y-1.5 text-sm">
+                                      {detail.stock_legs.map((leg, index) => (
+                                        <li key={index} className="text-sm">
+                                          <span className="font-mono font-medium">
+                                            {signedQuantity(leg.quantity)} {leg.symbol} shares
+                                          </span>
+                                          <span className="ml-2 text-xs text-muted-foreground">
+                                            avg cost {leg.average_cost ?? "unavailable"} | market value {leg.market_value ?? "unavailable"}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                                <p className="lg:col-span-2 text-xs text-muted-foreground">
+                                  Classification is deterministic from the displayed legs. Verify these match your intended structure before using payoff fields.
+                                  {detail.note ? ` Note: ${detail.note}` : ""}
+                                </p>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

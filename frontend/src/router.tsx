@@ -28,6 +28,9 @@ const AlphaZoo = lazy(() =>
 const OptionsStudio = lazy(() =>
   import("@/pages/OptionsStudio").then((m) => ({ default: m.OptionsStudio })),
 );
+const OptionsStudioPropose = lazy(() =>
+  import("@/pages/OptionsStudioPropose").then((m) => ({ default: m.OptionsStudioPropose })),
+);
 
 function PageLoader() {
   return (
@@ -62,6 +65,7 @@ export const router = createBrowserRouter([
       { path: "/alpha-zoo/compare", element: wrap(AlphaZoo) },
       { path: "/alpha-zoo/:alphaId", element: wrap(AlphaZoo) },
       { path: "/options-studio", element: wrap(OptionsStudio) },
+      { path: "/options-studio/propose", element: wrap(OptionsStudioPropose) },
     ],
   },
 ]);

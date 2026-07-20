@@ -7,9 +7,13 @@ from pathlib import Path
 import src.api.options_studio_routes as routes
 from src.api.options_studio_routes import (
     _SAMPLE_STATEMENT,
+    build_propose_payload,
     build_review_payload,
 )
 from src.options_studio.reconciliation import run_reconciliation
+
+_FEB_EXPIRY = "2026-02-20"
+_FAR_EXPIRY = "2026-06-19"
 
 _SAMPLE_TEXT = _SAMPLE_STATEMENT.read_text(encoding="utf-8")
 
@@ -105,3 +109,68 @@ def test_sample_derived_from_csv_no_duplicate_json():
     # duplicate JSON artifact in the frontend.
     repo_root = Path(routes.__file__).resolve().parents[3]
     assert not (repo_root / "frontend" / "public" / "options-studio-sample.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# POST /options-studio/propose
+# ---------------------------------------------------------------------------
+
+
+def _leg(underlying, right, strike, expiry, qty, premium, basis):
+    return {
+        "underlying": underlying,
+        "right": right,
+        "strike": strike,
+        "expiry": expiry,
+        "quantity": qty,
+        "premium": premium,
+        "price_basis": basis,
+    }
+
+
+def test_propose_invalid_body_returns_error(monkeypatch, tmp_path):
+    _point_private_dir(monkeypatch, tmp_path)
+    payload = build_propose_payload({"label": "bad", "legs": []})
+    assert payload["error"]["code"] == "invalid_trade"
+
+
+def test_propose_over_cap_candidate_blocks(monkeypatch, tmp_path):
+    _point_private_dir(monkeypatch, tmp_path)  # sample held book
+    body = {
+        "label": "MSFT 400/420 debit",
+        "legs": [
+            _leg("MSFT", "call", 400, _FEB_EXPIRY, 1, 15.0, "verified_quote"),
+            _leg("MSFT", "call", 420, _FEB_EXPIRY, -1, 6.0, "verified_quote"),
+        ],
+    }
+    payload = build_propose_payload(body)
+    assert payload["error"] is None
+    assert payload["overall"] == "BLOCK"  # max loss 900 > 500 cap
+    assert payload["data_source"] == "sample"
+
+
+def test_propose_user_estimate_is_at_most_watch(monkeypatch, tmp_path):
+    _point_private_dir(monkeypatch, tmp_path)
+    body = {
+        "label": "tiny estimate",
+        "legs": [
+            _leg("ZBB", "call", 100, _FAR_EXPIRY, 1, 1.20, "user_estimate"),
+            _leg("ZBB", "call", 102, _FAR_EXPIRY, -1, 0.40, "user_estimate"),
+        ],
+    }
+    payload = build_propose_payload(body)
+    assert payload["price_basis"] == "user_estimate"
+    assert payload["overall"] in {"WATCH", "BLOCK"}  # never ALLOW on an estimate
+    assert payload["overall"] != "ALLOW"
+
+
+def test_propose_isolates_held_and_candidate_counts(monkeypatch, tmp_path):
+    _point_private_dir(monkeypatch, tmp_path)
+    body = {
+        "label": "iso",
+        "legs": [_leg("ZBB", "call", 100, _FAR_EXPIRY, 1, 1.20, "verified_quote")],
+    }
+    payload = build_propose_payload(body)
+    # Sample held book has 7 option lines; the candidate has 1, kept separate.
+    assert payload["deltas"]["held_option_count"] == 7
+    assert payload["deltas"]["proposed_option_count"] == 1

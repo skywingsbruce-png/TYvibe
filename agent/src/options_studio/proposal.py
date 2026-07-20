@@ -153,13 +153,18 @@ def _leg_price_basis(raw: dict[str, Any], premium: Optional[float]) -> PriceBasi
 
 
 def load_proposed_trade(text: str) -> ProposedTrade:
-    """Parse a proposed-trade definition (YAML or JSON) into a ProposedTrade."""
+    """Parse a proposed-trade definition (YAML or JSON text) into a ProposedTrade."""
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ProposalError(f"Invalid proposed-trade file: {exc}") from exc
+    return proposed_trade_from_mapping(data)
+
+
+def proposed_trade_from_mapping(data: Any) -> ProposedTrade:
+    """Build a ProposedTrade from an already-decoded mapping (e.g. a JSON body)."""
     if not isinstance(data, dict):
-        raise ProposalError("Proposed-trade file must be a mapping with a 'legs' list.")
+        raise ProposalError("Proposed trade must be a mapping with a 'legs' list.")
 
     label = str(data.get("label") or "Proposed trade")
     raw_legs = data.get("legs") or data.get("option_legs") or []
@@ -293,8 +298,9 @@ class ProposalCard:
     deltas: dict[str, Any]
     report_markdown: str
 
-    def to_json(self) -> str:
-        payload = {
+    def to_payload(self) -> dict:
+        """Return the card as a JSON-safe dict (for the API / frontend)."""
+        return {
             "mode": "propose",
             "label": self.label,
             "price_basis": self.price_basis.value,
@@ -306,7 +312,9 @@ class ProposalCard:
             "rules_portfolio": self.rules_portfolio.to_dict(),
             "deltas": self.deltas,
         }
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_payload(), ensure_ascii=False, indent=2)
 
 
 def evaluate_proposal(
