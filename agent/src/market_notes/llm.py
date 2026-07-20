@@ -35,19 +35,53 @@ _SYSTEM_PROMPT = (
 )
 
 
-def llm_enabled() -> bool:
-    """Return whether the optional LLM layer is switched on AND configured.
+#: Privacy states surfaced in the API payload.
+PRIVACY_OFFLINE = "offline"
+PRIVACY_ENABLED_WITH_CONSENT = "enabled_with_remote_consent"
+PRIVACY_ENABLED_MISSING_CONSENT = "enabled_missing_consent"
 
-    Requires ``MARKET_NOTES_LLM_ENABLED`` truthy and a provider model present in
-    the environment. Defaults to ``False`` (fully offline).
-    """
-    # Explicit opt-in flag; provider presence is required so an enabled-but-
-    # unconfigured environment stays offline.
-    flag = os.getenv("MARKET_NOTES_LLM_ENABLED", "").strip().lower()
-    if flag not in _TRUTHY:
-        return False
+
+def _flag_on() -> bool:
+    return os.getenv("MARKET_NOTES_LLM_ENABLED", "").strip().lower() in _TRUTHY
+
+
+def _remote_consent() -> bool:
+    return os.getenv("MARKET_NOTES_REMOTE_LLM_CONSENT", "").strip().lower() in _TRUTHY
+
+
+def _provider_configured() -> bool:
     model = os.getenv("LANGCHAIN_MODEL_NAME", "") or os.getenv("OPENAI_MODEL", "")
     return bool(model.strip())
+
+
+def llm_enabled() -> bool:
+    """Return whether the LLM feature flag is on (independent of consent)."""
+    return _flag_on()
+
+
+def remote_llm_allowed() -> bool:
+    """Return whether content may be sent to a remote LLM.
+
+    Requires ALL of: the feature flag, explicit remote consent, and a configured
+    provider/model. Missing any one keeps the feature fully offline.
+    """
+    return _flag_on() and _remote_consent() and _provider_configured()
+
+
+def privacy_status() -> str:
+    """Return the explicit LLM privacy state for the API/UI.
+
+    * ``offline`` — the flag is off; notes are processed only on this machine.
+    * ``enabled_with_remote_consent`` — flag + consent + provider all set;
+      excerpts WILL be sent to the configured remote LLM.
+    * ``enabled_missing_consent`` — flag on but consent (or provider) missing;
+      the feature degrades to offline and sends nothing.
+    """
+    if not _flag_on():
+        return PRIVACY_OFFLINE
+    if _remote_consent() and _provider_configured():
+        return PRIVACY_ENABLED_WITH_CONSENT
+    return PRIVACY_ENABLED_MISSING_CONSENT
 
 
 def validate_llm_conclusions(raw: str, notes_by_id: dict[str, MarketNote]) -> list[Conclusion]:
@@ -117,9 +151,11 @@ def generate_llm_conclusions(notes: list[MarketNote]) -> list[Conclusion]:
     """Generate LLM conclusions when enabled; otherwise return ``[]``.
 
     Fully defensive: any provider/import/network error degrades to ``[]`` so the
-    page keeps working on the deterministic path.
+    page keeps working on the deterministic path. Content is sent to a remote
+    model ONLY when :func:`remote_llm_allowed` (flag + consent + provider).
     """
-    if not llm_enabled() or not notes:
+    # Hard gate: without explicit remote consent, never touch build_llm/invoke.
+    if not remote_llm_allowed() or not notes:
         return []
     try:
         from src.providers.llm import build_llm
@@ -140,6 +176,8 @@ def generate_llm_conclusions(notes: list[MarketNote]) -> list[Conclusion]:
         if isinstance(raw, list):  # some providers return content parts
             raw = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
     except Exception:  # noqa: BLE001 - never let the LLM path break the page
-        logger.exception("Market Notes LLM call failed; falling back to deterministic conclusions.")
+        # Deliberately NO exception detail / provider message / raw notes in the
+        # log — privacy first. Just note the fallback occurred.
+        logger.warning("Market Notes LLM call failed; using deterministic conclusions only.")
         return []
     return validate_llm_conclusions(str(raw), notes_by_id)

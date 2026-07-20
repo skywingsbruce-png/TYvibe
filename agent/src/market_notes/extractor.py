@@ -1,9 +1,15 @@
 """Deterministic structuring of raw messages into :class:`MarketNote`.
 
-Pure keyword/regex heuristics — no LLM, no network. The guiding rule: a field is
-populated only when the source **explicitly** supports it; otherwise it stays
-``None`` / ``UNKNOWN``. This module never invents an author, time, price,
-horizon, or condition.
+Pure keyword/regex heuristics — no LLM, no network. Two hardening rules:
+
+* **Symbols** are recognized only from an explicit ``$CASHTAG`` or from a known
+  set (indices + held-book underlyings + the maintained whitelist). Bare
+  all-caps chat noise (``FUD``, ``TACO``, ``AI``, ``LOL``) is left as plain text.
+* **Direction** requires an explicit sentiment token with word boundaries
+  (``bearish`` / ``bullish`` / ``看空`` / ``看多`` / ``跌破`` / ``突破`` …). Phrases
+  like ``short term`` / ``long term`` / ``I have a put`` do NOT imply a
+  direction. When nothing explicit is present the direction is ``UNKNOWN`` —
+  never guessed.
 """
 
 from __future__ import annotations
@@ -16,24 +22,14 @@ from src.market_notes.models import Direction, Horizon, MarketNote, RawMessage
 _EXCERPT_MAX = 600
 
 # ---------------------------------------------------------------------------
-# Symbols / indices
+# Symbols — explicit cashtag OR a member of a known set (never bare-token guess)
 # ---------------------------------------------------------------------------
 
-_KNOWN_INDICES = {"SPX", "SPY", "QQQ", "NDX", "DJI", "IWM", "VIX", "RUT", "ES", "NQ"}
-# Common all-caps words that are NOT tickers (avoid false positives).
-_TICKER_STOPWORDS = {
-    "I", "A", "AN", "THE", "OK", "AM", "PM", "ET", "EST", "PST", "UTC", "USD", "US",
-    "CEO", "CFO", "IPO", "ATH", "ATL", "DD", "IMO", "IMHO", "TL", "DR", "FYI", "LOL",
-    "EOD", "EOW", "YOLO", "FOMO", "PT", "SL", "TP", "OTM", "ITM", "ATM", "IV", "OI",
-    "CPI", "PCE", "PPI", "GDP", "FOMC", "PMI", "EPS", "YOY", "QOQ", "AH", "PM",
-    "IF", "OR", "AND", "NOT", "BUY", "SELL", "LONG", "SHORT", "CALL", "PUT", "CALLS", "PUTS",
-}
-# $TICKER (explicit) or bare 2-5 letter uppercase token.
-_CASHTAG_RE = re.compile(r"\$([A-Za-z]{1,6})\b")
-_BARE_TICKER_RE = re.compile(r"\b([A-Z]{2,5})\b")
+_CASHTAG_RE = re.compile(r"\$([A-Za-z][A-Za-z.\-]{0,5})\b")
+_BARE_TOKEN_RE = re.compile(r"\b([A-Z]{1,6})\b")
 
 
-def _extract_symbols(text: str) -> tuple[str, ...]:
+def _extract_symbols(text: str, known: frozenset[str]) -> tuple[str, ...]:
     found: list[str] = []
     seen: set[str] = set()
 
@@ -43,51 +39,36 @@ def _extract_symbols(text: str) -> tuple[str, ...]:
             seen.add(s)
             found.append(s)
 
+    # Explicit cashtags are always accepted (deliberate user intent).
     for m in _CASHTAG_RE.finditer(text):
         add(m.group(1))
-    for m in _BARE_TICKER_RE.finditer(text):
-        tok = m.group(1)
-        if tok in _KNOWN_INDICES or (tok not in _TICKER_STOPWORDS):
-            # A bare uppercase token is only accepted when it is a known index
-            # or a plausible ticker not in the stopword list.
+    # Bare uppercase tokens are accepted ONLY when known (index / held / whitelist).
+    for m in _BARE_TOKEN_RE.finditer(text):
+        tok = m.group(1).upper()
+        if tok in known:
             add(tok)
     return tuple(found)
 
 
 # ---------------------------------------------------------------------------
-# Direction
+# Direction — explicit sentiment only
 # ---------------------------------------------------------------------------
 
-_BEARISH = ("bear", "short", "downside", "breakdown", "put", "puts", "sell", "weak", "fade", "看空", "做空", "空头", "跌", "空")
-_BULLISH = ("bull", "long", "upside", "breakout", "call", "calls", "buy", "strong", "rip", "看多", "做多", "多头", "涨", "多")
-_NEUTRAL = ("neutral", "chop", "range", "sideways", "flat", "横盘", "震荡", "中性")
-_CONDITIONAL = ("if ", "unless", "until", "once ", "as long as", "provided", "如果", "除非", "一旦", "只要", "收复", "站上", "跌破前", "之前")
-
-
-def _has_any(text: str, needles: tuple[str, ...]) -> bool:
-    low = text.lower()
-    return any(n.lower() in low for n in needles)
-
-
-def _count_any(text: str, needles: tuple[str, ...]) -> int:
-    low = text.lower()
-    return sum(low.count(n.lower()) for n in needles)
+_BULLISH_RE = re.compile(r"\bbullish\b|看多|做多|突破|站上", re.IGNORECASE)
+_BEARISH_RE = re.compile(r"\bbearish\b|看空|做空|跌破|破位", re.IGNORECASE)
+_NEUTRAL_RE = re.compile(r"\bneutral\b|中性", re.IGNORECASE)
 
 
 def _extract_direction(text: str) -> Direction:
-    # A note's DIRECTION is its net lean; a conditional caveat ("... until X is
-    # reclaimed") is a separate dimension captured in setup/invalidation, so a
-    # clear bull/bear lean wins over the conditional marker. CONDITIONAL is used
-    # only when the note is contingent with no directional lean.
-    bear = _count_any(text, _BEARISH)
-    bull = _count_any(text, _BULLISH)
-    if bear > bull:
-        return Direction.BEARISH
-    if bull > bear:
+    bull = bool(_BULLISH_RE.search(text))
+    bear = bool(_BEARISH_RE.search(text))
+    if bull and not bear:
         return Direction.BULLISH
-    if _has_any(text, _CONDITIONAL):
-        return Direction.CONDITIONAL
-    if _has_any(text, _NEUTRAL):
+    if bear and not bull:
+        return Direction.BEARISH
+    if bull and bear:
+        return Direction.UNKNOWN  # mixed sentiment in one message -> not resolved
+    if _NEUTRAL_RE.search(text):
         return Direction.NEUTRAL
     return Direction.UNKNOWN
 
@@ -97,16 +78,16 @@ def _extract_direction(text: str) -> Direction:
 # ---------------------------------------------------------------------------
 
 _LEVEL_KEYWORDS = (
-    "above", "below", "support", "resistance", "break", "breaks", "reclaim", "target",
-    "hold", "over", "under", "上方", "下方", "支撑", "阻力", "关键位", "收复", "站上", "跌破", "目标",
+    "above", "below", "support", "resistance", "break", "breaks", "reclaim", "target", "hold", "over", "under",
+    "上方", "下方", "支撑", "阻力", "关键位", "收复", "站上", "跌破", "突破", "目标",
 )
-_CASH_PRICE_RE = re.compile(r"\$\s?(\d{1,6}(?:\.\d{1,4})?)")
+_CASH_PRICE_RE = re.compile(r"\$\s?(\d{1,7}(?:\.\d{1,4})?)")
 _NEAR_LEVEL_RE = re.compile(
-    r"(?:%s)\s*\$?\s*(\d{1,6}(?:\.\d{1,4})?)" % "|".join(re.escape(k) for k in _LEVEL_KEYWORDS),
+    r"(?:%s)\s*\$?\s*(\d{1,7}(?:\.\d{1,4})?)" % "|".join(re.escape(k) for k in _LEVEL_KEYWORDS),
     re.IGNORECASE,
 )
 _LEVEL_BEFORE_RE = re.compile(
-    r"\$?\s*(\d{1,6}(?:\.\d{1,4})?)\s*(?:%s)" % "|".join(re.escape(k) for k in _LEVEL_KEYWORDS),
+    r"\$?\s*(\d{1,7}(?:\.\d{1,4})?)\s*(?:%s)" % "|".join(re.escape(k) for k in _LEVEL_KEYWORDS),
     re.IGNORECASE,
 )
 
@@ -132,7 +113,12 @@ def _extract_key_levels(text: str) -> tuple[str, ...]:
 
 _INTRADAY = ("intraday", "today", "0dte", "scalp", "day trade", "eod", "盘中", "日内", "今天", "尾盘", "盘后")
 _DAYS = ("few days", "couple days", "this week", "swing", "next day", "数日", "几天", "本周", "近几日")
-_WEEKS = ("weeks", "next week", "monthly", "month", "数周", "几周", "下周", "月内", "一个月")
+_WEEKS = ("weeks", "next week", "monthly", "long term", "数周", "几周", "下周", "月内", "一个月", "中长期")
+
+
+def _has_any(text: str, needles: tuple[str, ...]) -> bool:
+    low = text.lower()
+    return any(n.lower() in low for n in needles)
 
 
 def _extract_horizon(text: str) -> Horizon:
@@ -155,14 +141,15 @@ _INVALIDATION_MARKERS = ("unless", "until", "invalidated", "invalid if", "stop "
 
 def _extract_clause(text: str, markers: tuple[str, ...]) -> str | None:
     low = text.lower()
+    best: tuple[int, str] | None = None
     for marker in markers:
         idx = low.find(marker.lower())
-        if idx != -1:
+        if idx != -1 and (best is None or idx < best[0]):
             tail = text[idx:]
-            # Trim to the end of the sentence / clause.
             clause = re.split(r"[.!?。！？\n]", tail, maxsplit=1)[0].strip()
-            return clause or None
-    return None
+            if clause:
+                best = (idx, clause)
+    return best[1] if best else None
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +166,14 @@ def _note_id(source_ref: str, content_hash: str) -> str:
     return f"n{digest[:8]}"
 
 
-def structure_message(msg: RawMessage) -> MarketNote:
-    """Turn a raw message into a structured :class:`MarketNote` (no guessing)."""
+def structure_message(msg: RawMessage, known_symbols: frozenset[str] = frozenset()) -> MarketNote:
+    """Turn a raw message into a structured :class:`MarketNote` (no guessing).
+
+    Args:
+        msg: The raw message.
+        known_symbols: Bare tokens accepted as symbols (indices + held-book
+            underlyings + whitelist). Explicit ``$cashtags`` are always accepted.
+    """
     content = _normalize(msg.text)
     excerpt = msg.text.strip()[:_EXCERPT_MAX]
     content_hash = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
@@ -188,7 +181,7 @@ def structure_message(msg: RawMessage) -> MarketNote:
         note_id=_note_id(msg.source_ref, content_hash),
         author=msg.author,
         timestamp=msg.timestamp,
-        symbols=_extract_symbols(content),
+        symbols=_extract_symbols(content, known_symbols),
         direction=_extract_direction(content),
         content=content,
         key_levels=_extract_key_levels(content),

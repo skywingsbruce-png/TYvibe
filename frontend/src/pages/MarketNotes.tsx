@@ -8,8 +8,10 @@ import {
   FileText,
   Link2,
   Loader2,
+  Lock,
   MessageSquare,
   RefreshCw,
+  Wifi,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,11 +20,14 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 type Direction = "bullish" | "bearish" | "neutral" | "conditional" | "unknown";
+type Privacy = "offline" | "enabled_with_remote_consent" | "enabled_missing_consent";
 
 interface Note {
   note_id: string;
   author: string;
   timestamp: string;
+  timestamp_parsed: string | null;
+  timestamp_ok: boolean;
   symbols: string[];
   direction: Direction;
   content: string;
@@ -44,7 +49,6 @@ interface Citation {
   source_file: string;
   source_ref: string;
 }
-
 interface Conclusion {
   conclusion_id: string;
   text: string;
@@ -52,13 +56,11 @@ interface Conclusion {
   needs_review: boolean;
   citations: Citation[];
 }
-
 interface Conflict {
   symbol: string;
   directions: string[];
   note_ids: string[];
 }
-
 interface SourceFile {
   name: string;
   kind: string;
@@ -66,7 +68,6 @@ interface SourceFile {
   message_count: number;
   sha256: string;
 }
-
 interface HeldStrategy {
   strategy_id: string;
   type: string;
@@ -74,22 +75,32 @@ interface HeldStrategy {
   earliest_expiry: string | null;
   legs: { right: string; strike: number; expiry: string; quantity: number }[];
 }
-
 interface HoldingsEntry {
   count: number;
   strategies: HeldStrategy[];
   earliest_expiry: string | null;
   has_near_dte: boolean;
 }
-
+interface CurrentCard {
+  available: boolean;
+  message: string | null;
+  windows: Record<string, string>;
+  included_count: number;
+  earliest: string | null;
+  latest: string | null;
+  excluded_unknown_time: number;
+  excluded_stale: number;
+  conclusions: Conclusion[];
+  conflicts: Conflict[];
+}
 interface Bundle {
   sources: SourceFile[];
   import_errors: { file: string; message: string }[];
   notes: Note[];
-  conclusions: Conclusion[];
-  conflicts: Conflict[];
+  current: CurrentCard;
   holdings: { data_source: string; as_of: string | null; by_symbol: Record<string, HoldingsEntry> };
   llm_enabled: boolean;
+  llm_privacy: Privacy;
   note_count: number;
   source_count: number;
 }
@@ -107,17 +118,55 @@ const DIR_STYLES: Record<Direction, string> = {
 };
 
 function DirBadge({ direction }: { direction: Direction }) {
-  return (
-    <span className={cn("rounded-md border px-1.5 py-0.5 text-xs font-medium", DIR_STYLES[direction])}>
-      {direction}
-    </span>
-  );
+  return <span className={cn("rounded-md border px-1.5 py-0.5 text-xs font-medium", DIR_STYLES[direction])}>{direction}</span>;
 }
 
-function fmtTime(iso: string): string {
+function fmtTime(iso: string | null): string {
   if (!iso || iso === "unknown") return "unknown";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function PrivacyBanner({ privacy }: { privacy: Privacy }) {
+  if (privacy === "enabled_with_remote_consent") {
+    return (
+      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-300">
+        <Wifi className="mr-1.5 inline h-4 w-4" />
+        LLM 已启用并授权：<strong>原文摘录会发送至已配置的远端 LLM</strong>（Note excerpts WILL be sent to the configured
+        remote LLM). It only rephrases/cites — never computes numbers or trade actions.
+      </div>
+    );
+  }
+  const text =
+    privacy === "enabled_missing_consent"
+      ? "LLM flag is on but remote consent is missing — running fully offline. 原文仅在本机处理。"
+      : "原文仅在本机处理 · Notes are processed only on this machine (offline).";
+  return (
+    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+      <Lock className="mr-1.5 inline h-4 w-4" />
+      {text}
+    </div>
+  );
+}
+
+function ExpandableCitations({ citations, open }: { citations: Citation[]; open: boolean }) {
+  if (!open) return null;
+  return (
+    <div className="ml-6 mt-2 space-y-1">
+      {citations.length === 0 ? (
+        <p className="text-xs text-amber-600">No citation — not shown as a formal conclusion.</p>
+      ) : (
+        citations.map((cite, i) => (
+          <div key={i} className="rounded bg-muted/50 p-2 text-xs">
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {cite.source_file} · {cite.source_ref} · {cite.note_id}
+            </span>
+            <p className="mt-0.5 italic">“{cite.excerpt}”</p>
+          </div>
+        ))
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +178,6 @@ export function MarketNotes() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [fAuthor, setFAuthor] = useState("all");
   const [fSymbol, setFSymbol] = useState("all");
   const [fDirection, setFDirection] = useState("all");
@@ -159,27 +207,23 @@ export function MarketNotes() {
   const toggle = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
-  const authors = useMemo(
-    () => Array.from(new Set((data?.notes ?? []).map((n) => n.author))).sort(),
-    [data],
+  const authors = useMemo(() => Array.from(new Set((data?.notes ?? []).map((n) => n.author))).sort(), [data]);
+  const symbols = useMemo(() => Array.from(new Set((data?.notes ?? []).flatMap((n) => n.symbols))).sort(), [data]);
+  const filtered = useMemo(
+    () =>
+      (data?.notes ?? []).filter((n) => {
+        if (fAuthor !== "all" && n.author !== fAuthor) return false;
+        if (fSymbol !== "all" && !n.symbols.includes(fSymbol)) return false;
+        if (fDirection !== "all" && n.direction !== fDirection) return false;
+        return true;
+      }),
+    [data, fAuthor, fSymbol, fDirection],
   );
-  const symbols = useMemo(
-    () => Array.from(new Set((data?.notes ?? []).flatMap((n) => n.symbols))).sort(),
-    [data],
-  );
-
-  const filtered = useMemo(() => {
-    return (data?.notes ?? []).filter((n) => {
-      if (fAuthor !== "all" && n.author !== fAuthor) return false;
-      if (fSymbol !== "all" && !n.symbols.includes(fSymbol)) return false;
-      if (fDirection !== "all" && n.direction !== fDirection) return false;
-      return true;
-    });
-  }, [data, fAuthor, fSymbol, fDirection]);
 
   if (loading) {
     return (
@@ -201,20 +245,17 @@ export function MarketNotes() {
   }
 
   const holdings = data.holdings.by_symbol;
+  const current = data.current;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight">
             <MessageSquare className="h-5 w-5 text-primary" />
             Market Notes · 观点审计
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Local &amp; read-only · imported opinions, structured &amp; traceable · not sent anywhere
-            {data.llm_enabled ? " · LLM: on" : " · LLM: off"}
-          </p>
+          <p className="text-sm text-muted-foreground">Local, read-only opinion audit · Discord JSON / Telegram / manual</p>
         </div>
         <button
           onClick={() => void load("refresh")}
@@ -224,9 +265,12 @@ export function MarketNotes() {
         </button>
       </div>
 
+      <PrivacyBanner privacy={data.llm_privacy} />
+
       {data.note_count === 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
-          No notes found. Drop Discord exports, Telegram text, or manual excerpts into
+          No notes found. v1 supports <strong>DiscordChatExporter JSON</strong> (export your channel as JSON), plus
+          Telegram text and manual <code>.md</code>/<code>.txt</code>. Drop files into
           <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">data/private/market-notes/</code> and refresh.
         </div>
       )}
@@ -258,71 +302,67 @@ export function MarketNotes() {
         </div>
       </div>
 
-      {/* Conclusion card */}
+      {/* Current conclusions (time-windowed) */}
       <div className="rounded-lg border bg-card p-4">
-        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">
-          Current conclusions (aggregated from imported opinions only)
-        </h2>
-        {data.conflicts.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {data.conflicts.map((c) => (
-              <span
-                key={c.symbol}
-                className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
-                title={c.directions.join(" vs ")}
-              >
-                观点冲突 · {c.symbol} ({c.directions.join(" / ")})
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="space-y-2">
-          {data.conclusions.length === 0 && (
-            <p className="text-sm text-muted-foreground">No conclusions yet.</p>
-          )}
-          {data.conclusions.map((c) => {
-            const id = `concl:${c.conclusion_id}`;
-            const open = expanded.has(id);
-            return (
-              <div
-                key={c.conclusion_id}
-                className={cn("rounded-md border p-2", c.needs_review && "border-amber-500/40 bg-amber-500/5")}
-              >
-                <button onClick={() => toggle(id)} className="flex w-full items-start gap-2 text-left text-sm">
-                  {open ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0" />}
-                  <span>
-                    {c.text}{" "}
-                    <span className="text-xs text-muted-foreground">
-                      [{c.origin}
-                      {c.needs_review ? " · needs manual review (no valid citation)" : ""}]
-                    </span>
-                  </span>
-                </button>
-                {open && (
-                  <div className="ml-6 mt-2 space-y-1">
-                    {c.citations.length === 0 ? (
-                      <p className="text-xs text-amber-600">No citation — not shown as a formal conclusion.</p>
-                    ) : (
-                      c.citations.map((cite, i) => (
-                        <div key={i} className="rounded bg-muted/50 p-2 text-xs">
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {cite.source_file} · {cite.source_ref} · {cite.note_id}
-                          </span>
-                          <p className="mt-0.5 italic">“{cite.excerpt}”</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">Current conclusions (time-windowed)</h2>
+          <span className="text-xs text-muted-foreground">
+            windows: intraday {current.windows.intraday} · days {current.windows.days} · weeks {current.windows.weeks}
+          </span>
         </div>
+
+        {!current.available ? (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+            {current.message}
+            <span className="mt-1 block text-xs text-muted-foreground">
+              excluded: {current.excluded_stale} stale · {current.excluded_unknown_time} unknown-time (kept in history below)
+            </span>
+          </p>
+        ) : (
+          <>
+            <div className="mb-3 text-xs text-muted-foreground">
+              {current.included_count} opinion(s) in window · {fmtTime(current.earliest)} → {fmtTime(current.latest)} ·
+              excluded {current.excluded_stale} stale / {current.excluded_unknown_time} unknown-time
+            </div>
+            {current.conflicts.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {current.conflicts.map((c) => (
+                  <span
+                    key={c.symbol}
+                    className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
+                  >
+                    观点冲突 · {c.symbol} ({c.directions.join(" / ")})
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="space-y-2">
+              {current.conclusions.map((c) => {
+                const id = `concl:${c.conclusion_id}`;
+                return (
+                  <div key={c.conclusion_id} className={cn("rounded-md border p-2", c.needs_review && "border-amber-500/40 bg-amber-500/5")}>
+                    <button onClick={() => toggle(id)} className="flex w-full items-start gap-2 text-left text-sm">
+                      {expanded.has(id) ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0" />}
+                      <span>
+                        {c.text}{" "}
+                        <span className="text-xs text-muted-foreground">
+                          [{c.origin}
+                          {c.needs_review ? " · needs manual review (no valid citation)" : ""}]
+                        </span>
+                      </span>
+                    </button>
+                    <ExpandableCitations citations={c.citations} open={expanded.has(id)} />
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs uppercase tracking-wide text-muted-foreground">Filter</span>
+        <span className="text-xs uppercase tracking-wide text-muted-foreground">Filter history</span>
         <select value={fAuthor} onChange={(e) => setFAuthor(e.target.value)} className="rounded-md border bg-background px-2 py-1 text-sm">
           <option value="all">All authors</option>
           {authors.map((a) => <option key={a} value={a}>{a}</option>)}
@@ -338,7 +378,7 @@ export function MarketNotes() {
         <span className="text-xs text-muted-foreground">{filtered.length} / {data.note_count} notes</span>
       </div>
 
-      {/* Timeline */}
+      {/* History timeline */}
       <div className="space-y-2">
         {filtered.map((n) => {
           const id = `note:${n.note_id}`;
@@ -351,7 +391,9 @@ export function MarketNotes() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
                     <span className="font-medium">{n.author}</span>
-                    <span className="text-xs text-muted-foreground">{fmtTime(n.timestamp)}</span>
+                    <span className={cn("text-xs", n.timestamp_ok ? "text-muted-foreground" : "italic text-muted-foreground/60")}>
+                      {n.timestamp_ok ? fmtTime(n.timestamp_parsed) : "unknown time"}
+                    </span>
                     <DirBadge direction={n.direction} />
                     {n.symbols.map((s) => (
                       <span key={s} className={cn("rounded px-1.5 py-0.5 text-xs", holdings[s] ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>
@@ -419,8 +461,9 @@ export function MarketNotes() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Opinions are stored, structured, and cross-referenced only. Missing fields show <em>unknown</em> / <em>unavailable</em>
-        and are never guessed. This page has no buy, sell, add, trim, or order controls.
+        Opinions are stored, structured, and cross-referenced only. Symbols come from cashtags / known indices / your held
+        book / the whitelist; missing fields show <em>unknown</em> / <em>unavailable</em> and are never guessed. This page
+        has no buy, sell, add, trim, or order controls.
       </p>
     </div>
   );
@@ -430,9 +473,7 @@ function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <span className="text-muted-foreground">{label}: </span>
-      <span className={cn(value === "unknown" || value === "unavailable" ? "text-muted-foreground/60 italic" : "font-medium")}>
-        {value}
-      </span>
+      <span className={cn(value === "unknown" || value === "unavailable" ? "text-muted-foreground/60 italic" : "font-medium")}>{value}</span>
     </div>
   );
 }

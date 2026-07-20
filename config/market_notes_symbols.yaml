@@ -1,0 +1,54 @@
+# Market Notes — symbol recognition + conclusion time windows.
+#
+# Bare ALL-CAPS words are NOT auto-treated as tickers. A bare token becomes a
+# symbol only when it is a known index, appears in your held book, or is on the
+# whitelist below. Explicit cashtags ($SNDK) are always recognized. This keeps
+# chat noise like FUD / TACO / AI / LOL out of the risk surface.
+
+# Known indices / index-ETFs (bare mentions accepted).
+indices:
+  - SPX
+  - SPY
+  - QQQ
+  - NDX
+  - VIX
+  - ES
+  - NQ
+  - IWM
+  - DIA
+  - RUT
+
+# Human-maintained ticker whitelist. Edit to match the names you actually
+# discuss. Anything not here (and not a cashtag / index / held underlying) stays
+# plain text.
+whitelist:
+  - SNDK
+  - SOXL
+  - SOXX
+  - SMH
+  - MU
+  - WDC
+  - STX
+  - NVDA
+  - AMD
+  - TSM
+  - MRVL
+  - AAPL
+  - MSFT
+  - GOOGL
+  - GOOG
+  - AMZN
+  - META
+  - TSLA
+  - SMCI
+  - AVGO
+
+# Freshness windows for the "current conclusions" card. An opinion is included
+# only when its timestamp parses AND its age is within the window for its
+# horizon. Unknown-time opinions stay in history but never enter the card.
+windows:
+  intraday_hours: 24
+  days_days: 7
+  weeks_days: 30
+  # Window applied to opinions whose horizon could not be determined.
+  unknown_days: 7
