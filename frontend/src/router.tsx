@@ -31,6 +31,9 @@ const OptionsStudio = lazy(() =>
 const OptionsStudioPropose = lazy(() =>
   import("@/pages/OptionsStudioPropose").then((m) => ({ default: m.OptionsStudioPropose })),
 );
+const MarketNotes = lazy(() =>
+  import("@/pages/MarketNotes").then((m) => ({ default: m.MarketNotes })),
+);
 
 function PageLoader() {
   return (
@@ -66,6 +69,7 @@ export const router = createBrowserRouter([
       { path: "/alpha-zoo/:alphaId", element: wrap(AlphaZoo) },
       { path: "/options-studio", element: wrap(OptionsStudio) },
       { path: "/options-studio/propose", element: wrap(OptionsStudioPropose) },
+      { path: "/market-notes", element: wrap(MarketNotes) },
     ],
   },
 ]);

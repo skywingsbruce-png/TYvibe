@@ -1,0 +1,27 @@
+{
+  "guild": { "id": "0", "name": "Fictional Trading Server (SAMPLE)" },
+  "channel": { "id": "0", "name": "options-chat" },
+  "messages": [
+    {
+      "id": "1001",
+      "type": "Default",
+      "timestamp": "2026-07-18T14:30:00.000+00:00",
+      "author": { "id": "a1", "name": "alice_fic", "nickname": "Alice" },
+      "content": "SNDK looks weak into the close, staying short below 80. Intraday I do not trust the bounce until we reclaim 82."
+    },
+    {
+      "id": "1002",
+      "type": "Default",
+      "timestamp": "2026-07-18T14:35:00.000+00:00",
+      "author": { "id": "a2", "name": "bob_fic", "nickname": "Bob" },
+      "content": "Disagree, I am long SNDK calls, breakout above 84 targets 90 this week."
+    },
+    {
+      "id": "1003",
+      "type": "Default",
+      "timestamp": "2026-07-18T15:00:00.000+00:00",
+      "author": { "id": "a3", "name": "carol_fic", "nickname": "Carol" },
+      "content": "SPX chop, neutral here. No trade for me."
+    }
+  ]
+}

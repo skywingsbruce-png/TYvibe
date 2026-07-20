@@ -16,6 +16,9 @@ const PROXY_PATHS = [
   "/shadow-reports",
   // Proxy ONLY the API subpath, not the SPA page route "/options-studio".
   "/options-studio/review",
+  "/options-studio/propose",
+  // Market Notes API. Exact path so the SPA route "/market-notes" is not proxied.
+  "/market-notes/data",
 ];
 
 export default defineConfig(({ mode }) => {

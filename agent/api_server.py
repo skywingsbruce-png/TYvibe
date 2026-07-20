@@ -278,6 +278,10 @@ register_alpha_routes(app)
 from src.api.options_studio_routes import register_options_studio_routes  # noqa: E402
 register_options_studio_routes(app)
 
+# --- Market Notes / opinion audit (local, read-only) ---
+from src.api.market_notes_routes import register_market_notes_routes  # noqa: E402
+register_market_notes_routes(app)
+
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)

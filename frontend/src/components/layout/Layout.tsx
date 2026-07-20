@@ -22,6 +22,7 @@ export function Layout() {
     { to: "/reports", icon: FileText, label: t('layout.reports') },
     { to: "/alpha-zoo", icon: Layers, label: t('layout.alphaZoo') },
     { to: "/options-studio", icon: ShieldCheck, label: "Options Studio" },
+    { to: "/market-notes", icon: MessageSquare, label: "Market Notes" },
     { to: "/settings", icon: Settings, label: t('layout.settings') },
     { to: "/correlation", icon: BarChart3, label: t('layout.correlation') },
   ];
