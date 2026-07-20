@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date
 from typing import Optional
 
@@ -66,12 +67,63 @@ def _num(raw: Optional[str]) -> Optional[float]:
 
 
 def _is_option_category(category: str) -> bool:
-    return "option" in category.lower()
+    return "option" in category.lower() or "期权" in category
 
 
 def _is_stock_category(category: str) -> bool:
     cat = category.lower()
-    return "stock" in cat or cat in {"stk", "equity", "equities"}
+    return "stock" in cat or cat in {"stk", "equity", "equities"} or "股票" in category
+
+
+# IBKR Activity Statements use localized section and column names when exported
+# from a non-English portal. Canonicalizing only structural labels keeps values
+# untouched and lets the existing conservative parsers make the risk decisions.
+_SECTION_ALIASES = {
+    "账户信息": "Account Information",
+    "净资产值": "Net Asset Value",
+    "现金报告": "Cash Report",
+    "未平仓持仓": "Open Positions",
+    "交易": "Trades",
+    "金融产品信息": "Financial Instrument Information",
+}
+
+_COLUMN_ALIASES = {
+    "域名称": "Field Name",
+    "域值": "Field Value",
+    "资产分类": "Asset Category",
+    "货币": "Currency",
+    "代码": "Symbol",
+    "描述": "Description",
+    "数量": "Quantity",
+    "合约乘数": "Mult",
+    "乘数": "Multiplier",
+    "成本价格": "Cost Price",
+    "价值": "Value",
+    "底层": "Underlying",
+    "到期": "Expiry",
+    "类型": "Type",
+    "执行": "Strike",
+    "日期/时间": "Date/Time",
+    "交易价格": "T. Price",
+    "佣金/税": "Comm/Fee",
+    "总数": "Total",
+    "货币总结": "Currency Summary",
+}
+
+_CHINESE_MONTHS = {
+    "一月": 1,
+    "二月": 2,
+    "三月": 3,
+    "四月": 4,
+    "五月": 5,
+    "六月": 6,
+    "七月": 7,
+    "八月": 8,
+    "九月": 9,
+    "十月": 10,
+    "十一月": 11,
+    "十二月": 12,
+}
 
 
 class IbkrActivityStatementParser(BrokerStatementParser):
@@ -84,7 +136,13 @@ class IbkrActivityStatementParser(BrokerStatementParser):
         has_sections = "Header" in head and "Data" in head
         has_known_section = any(
             marker in head
-            for marker in ("Open Positions", "Financial Instrument Information", "Statement,")
+            for marker in (
+                "Open Positions",
+                "Financial Instrument Information",
+                "Statement,",
+                "未平仓持仓",
+                "金融产品信息",
+            )
         )
         return has_sections and has_known_section
 
@@ -102,6 +160,8 @@ class IbkrActivityStatementParser(BrokerStatementParser):
         )
         trade_lots = _parse_trades(sections.get("Trades", []), instrument_map, warnings)
         cash = _parse_ending_cash(sections.get("Cash Report", []), base_currency)
+        if cash is None:
+            cash = _parse_net_asset_cash(sections.get("Net Asset Value", []))
         if cash is None:
             warnings.append(
                 ParseWarning(
@@ -215,15 +275,21 @@ def _read_sections(text: str) -> dict[str, list[dict[str, str]]]:
     for raw in reader:
         if len(raw) < 2:
             continue
-        section, kind = raw[0], raw[1]
+        section, kind = _SECTION_ALIASES.get(raw[0], raw[0]), raw[1]
         cols = raw[2:]
         if kind == "Header":
-            headers[section] = cols
+            headers[section] = [_COLUMN_ALIASES.get(column, column) for column in cols]
         elif kind == "Data":
             header = headers.get(section)
             if not header:
                 continue
-            row = {header[i]: (cols[i] if i < len(cols) else "") for i in range(len(header))}
+            row: dict[str, str] = {}
+            for index, column in enumerate(header):
+                value = cols[index] if index < len(cols) else ""
+                # Localized IBKR files can emit duplicate "Code" columns. The
+                # first populated value is the actual instrument identity.
+                if column not in row or (not row[column].strip() and value.strip()):
+                    row[column] = value
             sections.setdefault(section, []).append(row)
     return sections
 
@@ -233,8 +299,11 @@ def _build_instrument_map(rows: list[dict[str, str]]) -> dict[str, dict[str, str
     mapping: dict[str, dict[str, str]] = {}
     for row in rows:
         symbol = (row.get("Symbol", "") or "").strip().upper()
+        description = (row.get("Description", "") or "").strip().upper()
         if symbol:
             mapping[symbol] = row
+        if description:
+            mapping.setdefault(description, row)
     return mapping
 
 
@@ -278,7 +347,7 @@ def _parse_open_positions(
     options: list[OptionContract] = []
     for row in rows:
         discriminator = (row.get("DataDiscriminator") or "").strip().lower()
-        if discriminator and discriminator not in {"summary", "lot", "order"}:
+        if discriminator and discriminator != "summary":
             continue
         category = row.get("Asset Category", "") or row.get("Asset Class", "")
         symbol = (row.get("Symbol", "") or "").strip().upper()
@@ -411,14 +480,33 @@ def _parse_ending_cash(rows: list[dict[str, str]], base_currency: str) -> Option
         first_val = next(iter(row.values()), "")
         candidate_label = (first_val or "").strip().lower()
         currency = (row.get("Currency", "") or "").strip().upper()
-        if "ending cash" in candidate_label and currency in {base_currency.upper(), "BASE_SUMMARY", ""}:
+        is_ending_cash = "ending cash" in candidate_label or "期末现金" in candidate_label
+        is_base_summary = currency in {base_currency.upper(), "BASE_SUMMARY", "基础货币总结", ""}
+        if is_ending_cash and is_base_summary:
             total = _num(row.get("Total") or row.get("Ending Cash"))
             if total is not None:
                 return total
     return None
 
 
+def _parse_net_asset_cash(rows: list[dict[str, str]]) -> Optional[float]:
+    """Fallback to the base-currency cash total in Net Asset Value."""
+    for row in rows:
+        category = (row.get("Asset Category", "") or "").strip().lower()
+        if category == "cash" or category == "现金":
+            amount = _num(row.get("Current Total") or row.get("Current Long") or row.get("Total"))
+            if amount is not None:
+                return amount
+    return None
+
+
 def _detect_currency(sections: dict[str, list[dict[str, str]]]) -> str:
+    for row in sections.get("Account Information", []):
+        field_name = (row.get("Field Name", "") or "").strip().lower()
+        if field_name in {"base currency", "基础货币"}:
+            currency = (row.get("Field Value", "") or "").strip().upper()
+            if currency:
+                return currency
     for row in sections.get("Open Positions", []):
         currency = (row.get("Currency", "") or "").strip().upper()
         if currency:
@@ -430,10 +518,26 @@ def _detect_as_of(sections: dict[str, list[dict[str, str]]]) -> date:
     for row in sections.get("Statement", []):
         if (row.get("Field Name", "") or "").strip().lower() in {"period", "when generated"}:
             field_value = row.get("Field Value", "") or ""
-            parsed = parse_expiry(field_value.split()[0]) if field_value else None
+            parsed = _parse_statement_date(field_value)
             if parsed is not None:
                 return parsed
     return date.today()
+
+
+def _parse_statement_date(raw: str) -> Optional[date]:
+    """Parse ISO/English dates plus localized IBKR period labels."""
+    text = (raw or "").strip()
+    parsed = parse_expiry(text)
+    if parsed is not None:
+        return parsed
+    iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+    if iso_match:
+        return parse_expiry(iso_match.group(1))
+    chinese_match = re.search(r"(一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月)\s*(\d{1,2})\s*,\s*(\d{4})", text)
+    if chinese_match:
+        month, day, year = chinese_match.groups()
+        return date(int(year), _CHINESE_MONTHS[month], int(day))
+    return None
 
 
 def _parse_datetime_cell(raw: str) -> date:

@@ -44,6 +44,36 @@ def test_activity_statement_emits_warning_for_unresolved_option():
     assert mystery and mystery[0].code == "unresolved_option"
 
 
+def test_activity_statement_parses_localized_ibkr_columns_without_duplicate_lots():
+    localized = "\n".join(
+        [
+            "Statement,Header,域名称,域值",
+            'Statement,Data,Period,"七月 17, 2026"',
+            "账户信息,Header,域名称,域值",
+            "账户信息,Data,基础货币,EUR",
+            "现金报告,Header,货币总结,货币,总数",
+            "现金报告,Data,期末现金,基础货币总结,1234.50",
+            "金融产品信息,Header,资产分类,代码,描述,底层,乘数,到期,类型,执行,代码",
+            "金融产品信息,Data,股票和指数期权,ACME   260821P00100000,ACME 21AUG26 100 P,ACME,100,2026-08-21,P,100,",
+            "未平仓持仓,Header,DataDiscriminator,资产分类,货币,代码,开盘,数量,合约乘数,成本价格,价值,代码",
+            "未平仓持仓,Data,Summary,股票,USD,ACME,-,10,1,20,250,",
+            "未平仓持仓,Data,Summary,股票和指数期权,USD,ACME 21AUG26 100 P,-,-1,100,3,-300,",
+            "未平仓持仓,Data,Lot,股票和指数期权,USD,ACME 21AUG26 100 P,2026-07-01,-1,,3,-300,",
+        ]
+    )
+
+    result = parse_statement(localized)
+
+    assert result.snapshot.base_currency == "EUR"
+    assert result.snapshot.cash == 1234.50
+    assert result.snapshot.as_of.isoformat() == "2026-07-17"
+    assert len(result.snapshot.underlyings) == 1
+    assert len(result.snapshot.options) == 1
+    assert result.snapshot.options[0].underlying == "ACME"
+    assert result.snapshot.options[0].quantity == -1
+    assert "cash_not_found" not in {warning.code for warning in result.warnings}
+
+
 def test_activity_statement_does_not_leak_account_number():
     # The real account id in the fixture must never appear on the snapshot.
     result = parse_statement(_read("ibkr_activity_sample.csv"), account_label="acct-1")
