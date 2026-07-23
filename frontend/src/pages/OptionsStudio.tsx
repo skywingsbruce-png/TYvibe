@@ -27,6 +27,8 @@ interface Payoff {
   breakevens: number[];
   unbounded_profit: boolean;
   unbounded_loss: boolean;
+  approximate?: boolean;
+  net_cash?: number | null;
 }
 
 interface StrategyRisk {
@@ -38,6 +40,7 @@ interface StrategyRisk {
   payoff: Payoff;
   greeks: { available: boolean };
   scenarios: { available: boolean };
+  assignment_or_margin_risk?: boolean;
 }
 
 interface Verdict {
@@ -99,11 +102,17 @@ interface ReviewPayload {
   } | null;
   portfolio_risk: {
     total_defined_max_loss: number;
+    deterministic_defined_max_loss?: number;
+    time_spread_net_debit_proxy?: number;
+    combined_risk_proxy?: number;
     unbounded_loss_strategies: number;
     indeterminate_risk_strategies: number;
+    indeterminate_time_spread_count?: number;
+    approximate_risk_strategies?: number;
     unclassified_strategies: number;
     near_dte_risk: number;
     concentration_by_underlying: { underlying: string; fraction: number }[];
+    concentration_includes_time_spread?: boolean;
     strategies: StrategyRisk[];
   } | null;
   rules: { overall: Severity; verdicts: Verdict[] } | null;
@@ -114,21 +123,26 @@ interface ReviewPayload {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function money(v: number | null | undefined): string {
+// Format using the statement's actual currency code (no FX conversion, no
+// hardcoded $), e.g. "EUR 1,234.56" — matching the backend report's style.
+function money(v: number | null | undefined, ccy: string): string {
   if (v === null || v === undefined) return "—";
-  return v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const code = (ccy || "").trim() || "?";
+  return `${code} ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function payoffLoss(p: Payoff): string {
+function payoffLoss(p: Payoff, ccy: string): string {
+  if (p.approximate) return "approximate";
   if (!p.available) return "unavailable";
   if (p.unbounded_loss || p.max_loss === null) return "unbounded";
-  return money(p.max_loss);
+  return money(p.max_loss, ccy);
 }
 
-function payoffProfit(p: Payoff): string {
+function payoffProfit(p: Payoff, ccy: string): string {
+  if (p.approximate) return "approximate";
   if (!p.available) return "unavailable";
   if (p.unbounded_profit || p.max_profit === null) return "unbounded";
-  return money(p.max_profit);
+  return money(p.max_profit, ccy);
 }
 
 const SEV_STYLES: Record<Severity, string> = {
@@ -259,6 +273,7 @@ export function OptionsStudio() {
   const isSample = data.data_source === "sample";
   const realUnusable = data.data_source === "real" && !data.risk_usable;
   const { snapshot, portfolio_risk: risk, rules, warnings } = data;
+  const ccy = snapshot?.base_currency ?? "?";
   const strategyDetails = new Map(snapshot?.strategies.map((strategy) => [strategy.strategy_id, strategy]));
 
   function toggleStrategy(strategyId: string) {
@@ -381,17 +396,51 @@ export function OptionsStudio() {
           </div>
 
           {/* Parse summary tiles */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <Tile label="Stocks" value={String(snapshot.underlyings.length)} />
             <Tile label="Options" value={String(snapshot.options.length)} />
-            <Tile label="Cash" value={money(snapshot.cash)} />
+            <Tile label={`Cash (${ccy})`} value={money(snapshot.cash, ccy)} />
             <Tile label="Trades" value={String(snapshot.trade_lots.length)} />
             <Tile label="Strategies" value={String(risk.strategies.length)} />
-            <Tile
-              label="Total max loss"
-              value={money(risk.total_defined_max_loss)}
-              hint={risk.unbounded_loss_strategies ? `+${risk.unbounded_loss_strategies} unbounded` : "defined risk"}
-            />
+          </div>
+
+          {/* Risk aggregation — three distinct amounts, never conflated into one "total risk" */}
+          <div className="rounded-lg border bg-card p-4">
+            <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Portfolio risk (three distinct amounts)</h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Tile
+                label="Deterministic defined max loss"
+                value={money(risk.deterministic_defined_max_loss ?? risk.total_defined_max_loss, ccy)}
+                hint="exact static risk (verticals, long calls/puts, short puts, covered calls)"
+              />
+              <Tile
+                label="Time-spread net-debit proxy"
+                value={money(risk.time_spread_net_debit_proxy ?? 0, ccy)}
+                hint={
+                  [
+                    "approximate",
+                    risk.approximate_risk_strategies ? `${risk.approximate_risk_strategies} PMCC/calendar/diagonal` : "",
+                    risk.indeterminate_time_spread_count
+                      ? `${risk.indeterminate_time_spread_count} unquantifiable`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                }
+              />
+              <Tile
+                label="Combined risk proxy"
+                value={money(risk.combined_risk_proxy ?? risk.total_defined_max_loss, ccy)}
+                hint="not a precise max loss · used for concentration"
+              />
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Real option prices / IV are required to model a precise maximum loss for time spreads; the net debit is
+              only a risk proxy, not a quote or margin figure.
+              {risk.unbounded_loss_strategies > 0 && (
+                <span className="font-medium text-red-600"> · {risk.unbounded_loss_strategies} unbounded-loss strateg{risk.unbounded_loss_strategies === 1 ? "y" : "ies"}</span>
+              )}
+            </p>
           </div>
 
           {/* Strategies */}
@@ -437,7 +486,14 @@ export function OptionsStudio() {
                             {s.underlying}
                           </button>
                         </td>
-                        <td className="p-3 capitalize">{humanType(s.strategy_type)}</td>
+                        <td className="p-3 capitalize">
+                          {humanType(s.strategy_type)}
+                          {s.assignment_or_margin_risk && (
+                            <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-600" title="assignment / margin risk; payoff approximate">
+                              assign/margin
+                            </span>
+                          )}
+                        </td>
                         <td className="p-3">
                           <span className={cn("tabular-nums", near && "font-semibold text-amber-600")}>
                             {s.dte ?? "—"}
@@ -445,10 +501,10 @@ export function OptionsStudio() {
                         </td>
                         <td className="p-3 text-right tabular-nums">
                           <span className={s.payoff.unbounded_loss ? "font-semibold text-red-600" : undefined}>
-                            {payoffLoss(s.payoff)}
+                            {payoffLoss(s.payoff, ccy)}
                           </span>
                         </td>
-                        <td className="p-3 text-right tabular-nums">{payoffProfit(s.payoff)}</td>
+                        <td className="p-3 text-right tabular-nums">{payoffProfit(s.payoff, ccy)}</td>
                         <td className="p-3 tabular-nums text-muted-foreground">
                           {s.payoff.available && s.payoff.breakevens.length
                             ? s.payoff.breakevens.map((b) => b.toFixed(2)).join(", ")
@@ -527,10 +583,14 @@ export function OptionsStudio() {
           {/* Concentration + warnings */}
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="rounded-lg border bg-card p-4">
-              <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Concentration by underlying</h2>
+              <h2 className="mb-1 text-sm font-semibold text-muted-foreground">Concentration by underlying</h2>
+              <p className="mb-3 text-[11px] text-muted-foreground">
+                of the combined risk proxy
+                {risk.concentration_includes_time_spread ? " (incl. time-spread net debit)" : " (deterministic only)"}
+              </p>
               <div className="space-y-2">
                 {risk.concentration_by_underlying.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No defined-risk concentration to show.</p>
+                  <p className="text-sm text-muted-foreground">No concentration to show.</p>
                 )}
                 {risk.concentration_by_underlying.map((c) => (
                   <div key={c.underlying}>
@@ -548,7 +608,7 @@ export function OptionsStudio() {
                 ))}
               </div>
               <div className="mt-3 text-xs text-muted-foreground">
-                Near-14-DTE risk: <span className="font-medium">{money(risk.near_dte_risk)}</span>
+                Near-14-DTE risk: <span className="font-medium">{money(risk.near_dte_risk, ccy)}</span>
               </div>
             </div>
 

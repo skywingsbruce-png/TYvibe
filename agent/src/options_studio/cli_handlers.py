@@ -146,8 +146,15 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
     print(f"  trades        : {len(result.snapshot.trade_lots)}")
     print(f"  strategies    : {len(result.snapshot.strategies)}")
     print(f"  warnings      : {len(result.warnings)}")
-    print(f"  total max loss: ${result.portfolio_risk.total_defined_max_loss:,.2f} "
-          f"(+{result.portfolio_risk.unbounded_loss_strategies} unbounded)")
+    _ccy = result.snapshot.base_currency or "?"
+    _pr = result.portfolio_risk
+    print(f"  deterministic defined max loss : {_ccy} {_pr.deterministic_defined_max_loss:,.2f}")
+    print(f"  time-spread net-debit proxy    : {_ccy} {_pr.time_spread_net_debit_proxy:,.2f} "
+          f"(approximate; {_pr.approximate_risk_strategies} time spread(s))")
+    print(f"  combined risk proxy            : {_ccy} {_pr.combined_risk_proxy:,.2f} "
+          "(NOT a precise max loss; used for concentration)")
+    print(f"  unbounded / indeterminate      : {_pr.unbounded_loss_strategies} unbounded, "
+          f"{_pr.indeterminate_time_spread_count} time-spread indeterminate")
     print(f"  rules overall : {result.rules_report.overall.label}")
 
     if not args.dry_run:

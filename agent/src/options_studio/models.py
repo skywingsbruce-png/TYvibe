@@ -53,6 +53,8 @@ class StrategyType(str, Enum):
     VERTICAL_DEBIT_SPREAD = "vertical_debit_spread"
     VERTICAL_CREDIT_SPREAD = "vertical_credit_spread"
     PMCC = "poor_mans_covered_call"
+    CALENDAR_CALL_SPREAD = "calendar_call_spread"
+    DIAGONAL_CALL_SPREAD = "diagonal_call_spread"
     LEAPS = "leaps"
     UNCLASSIFIED = "unclassified"
 

@@ -74,6 +74,7 @@ class PayoffMetrics:
     net_cash: Optional[float] = None  # + = net credit received, - = net debit paid
     unbounded_profit: bool = False
     unbounded_loss: bool = False
+    approximate: bool = False  # payoff cannot be modeled reliably (e.g. diagonals)
     reason: str = ""
 
     def to_dict(self) -> dict:
@@ -85,6 +86,7 @@ class PayoffMetrics:
             "net_cash": self.net_cash,
             "unbounded_profit": self.unbounded_profit,
             "unbounded_loss": self.unbounded_loss,
+            "approximate": self.approximate,
             "reason": self.reason,
         }
 
@@ -141,6 +143,7 @@ class StrategyRisk:
     payoff: PayoffMetrics
     greeks: GreeksResult
     scenarios: ScenarioResult
+    assignment_or_margin_risk: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -152,36 +155,80 @@ class StrategyRisk:
             "payoff": self.payoff.to_dict(),
             "greeks": self.greeks.to_dict(),
             "scenarios": self.scenarios.to_dict(),
+            "assignment_or_margin_risk": self.assignment_or_margin_risk,
         }
 
 
 @dataclass(frozen=True)
 class PortfolioRisk:
-    """Portfolio-level aggregation."""
+    """Portfolio-level aggregation.
+
+    Three distinct amounts are kept apart and must NOT be conflated into one
+    "total risk":
+
+    * ``deterministic_defined_max_loss`` — sum of the strictly computable static
+      max losses (verticals, long calls/puts, short puts, covered calls, …).
+      This is an exact, data-free number.
+    * ``time_spread_net_debit_proxy`` — sum of the net debit paid for PMCC /
+      calendar / diagonal call spreads. It is a **conservative capital-at-risk
+      proxy**, NOT a precise max loss, and is always flagged approximate. Time
+      spreads with a net credit or a missing cost basis are *not* counted as
+      zero: they are surfaced via ``indeterminate_time_spread_count``.
+    * ``combined_risk_proxy`` — the two above added together. Used only to rank
+      portfolio exposure / concentration; it is explicitly *not* a precise
+      maximum loss.
+
+    ``total_defined_max_loss`` is retained as an alias of
+    ``deterministic_defined_max_loss`` for backward compatibility, and must never
+    be presented as the portfolio's complete risk.
+    """
 
     as_of: str
     base_currency: str
     strategies: tuple[StrategyRisk, ...]
-    total_defined_max_loss: float
+    deterministic_defined_max_loss: float
+    time_spread_net_debit_proxy: float
+    combined_risk_proxy: float
     unbounded_loss_strategies: int
     indeterminate_risk_strategies: int
+    indeterminate_time_spread_count: int
+    approximate_risk_strategies: int
     unclassified_strategies: int
-    concentration_by_underlying: tuple[tuple[str, float], ...]  # (symbol, fraction)
+    concentration_by_underlying: tuple[tuple[str, float], ...]  # (symbol, fraction of combined proxy)
+    concentration_basis: str
+    concentration_includes_time_spread: bool
     near_dte_risk: float
     near_dte_strategy_ids: tuple[str, ...]
+
+    @property
+    def total_defined_max_loss(self) -> float:
+        """Backward-compatible alias: the *deterministic* defined max loss only.
+
+        Never treat this as the complete portfolio risk — see
+        ``combined_risk_proxy``.
+        """
+        return self.deterministic_defined_max_loss
 
     def to_dict(self) -> dict:
         return {
             "as_of": self.as_of,
             "base_currency": self.base_currency,
             "strategies": [s.to_dict() for s in self.strategies],
-            "total_defined_max_loss": self.total_defined_max_loss,
+            "deterministic_defined_max_loss": self.deterministic_defined_max_loss,
+            "time_spread_net_debit_proxy": self.time_spread_net_debit_proxy,
+            "combined_risk_proxy": self.combined_risk_proxy,
+            # Backward-compatible alias (== deterministic_defined_max_loss). Not the full risk.
+            "total_defined_max_loss": self.deterministic_defined_max_loss,
             "unbounded_loss_strategies": self.unbounded_loss_strategies,
             "indeterminate_risk_strategies": self.indeterminate_risk_strategies,
+            "indeterminate_time_spread_count": self.indeterminate_time_spread_count,
+            "approximate_risk_strategies": self.approximate_risk_strategies,
             "unclassified_strategies": self.unclassified_strategies,
             "concentration_by_underlying": [
                 {"underlying": u, "fraction": f} for u, f in self.concentration_by_underlying
             ],
+            "concentration_basis": self.concentration_basis,
+            "concentration_includes_time_spread": self.concentration_includes_time_spread,
             "near_dte_risk": self.near_dte_risk,
             "near_dte_strategy_ids": list(self.near_dte_strategy_ids),
         }
@@ -236,8 +283,36 @@ def _strategy_slopes(strategy: Strategy) -> tuple[float, float]:
     return left, right
 
 
+# Strategies whose legs expire on DIFFERENT dates. A single-expiry intrinsic
+# payoff is misleading for these because the longer-dated long call still holds
+# time value at the near leg's expiry, which cannot be valued without live
+# option pricing. We therefore refuse to emit deterministic max profit/loss.
+_TIME_SPREAD_TYPES = frozenset(
+    {StrategyType.PMCC, StrategyType.CALENDAR_CALL_SPREAD, StrategyType.DIAGONAL_CALL_SPREAD}
+)
+
+
 def compute_payoff(strategy: Strategy) -> PayoffMetrics:
     """Compute expiry payoff metrics for ``strategy`` from strikes + premiums."""
+    if strategy.strategy_type in _TIME_SPREAD_TYPES:
+        # Do NOT emit a single-expiry intrinsic payoff (it would ignore the long
+        # leg's residual time value and can produce a false negative max-profit).
+        # Report it as approximate/unavailable with the net debit as the only
+        # data-free defined-risk indicator.
+        return PayoffMetrics(
+            available=False,
+            approximate=True,
+            net_cash=round(_net_cash(strategy), 4) if _net_cash(strategy) is not None else None,
+            unbounded_profit=False,
+            unbounded_loss=False,
+            reason=(
+                "Diagonal/calendar with different leg expiries: the longer-dated long call still "
+                "holds time value at the near leg's expiry, which cannot be valued without live "
+                "option pricing. Max profit/loss are unavailable (approximate); the short call is "
+                "covered by the long call, not an unbounded naked short."
+            ),
+        )
+
     strikes = sorted({leg.contract.strike for leg in strategy.option_legs})
     has_options = bool(strategy.option_legs)
     has_stock = bool(strategy.stock_legs)
@@ -435,6 +510,7 @@ def analyze_strategy(
         payoff=compute_payoff(strategy),
         greeks=compute_greeks(strategy, provider, as_of, risk_free_rate),
         scenarios=compute_scenarios(strategy, provider),
+        assignment_or_margin_risk=strategy.strategy_type in _TIME_SPREAD_TYPES,
     )
 
 
@@ -455,11 +531,16 @@ def analyze_portfolio(
     provider = provider or NullMarketDataProvider()
     risks = [analyze_strategy(s, provider, snapshot.as_of, risk_free_rate) for s in snapshot.strategies]
 
-    total_defined_max_loss = 0.0
+    deterministic_defined_max_loss = 0.0
+    time_spread_net_debit_proxy = 0.0
     unbounded = 0
     indeterminate = 0
+    indeterminate_time_spread = 0
+    approximate = 0
     unclassified = 0
-    loss_by_underlying: dict[str, float] = {}
+    # Per-underlying contribution to the COMBINED risk proxy (deterministic loss
+    # + time-spread net debit), used for concentration ranking.
+    combined_by_underlying: dict[str, float] = {}
     near_dte_risk = 0.0
     near_dte_ids: list[str] = []
 
@@ -467,24 +548,46 @@ def analyze_portfolio(
         if risk.strategy_type == StrategyType.UNCLASSIFIED.value:
             unclassified += 1
         payoff = risk.payoff
-        loss_magnitude: Optional[float] = None
-        if not payoff.available:
+        # ``contribution`` is this strategy's share of the combined risk proxy
+        # (None => it could not be quantified and is surfaced as indeterminate,
+        # never silently treated as zero).
+        contribution: Optional[float] = None
+
+        if payoff.approximate:
+            # PMCC / calendar / diagonal. Its true max loss needs live pricing;
+            # use the net debit paid as a conservative capital-at-risk proxy.
+            approximate += 1
+            net_cash = payoff.net_cash
+            if net_cash is not None and net_cash < 0:
+                contribution = abs(net_cash)  # net debit paid
+                time_spread_net_debit_proxy += contribution
+            else:
+                # Net credit or missing cost basis: cannot proxy capital at risk,
+                # and it is NOT zero risk. Single it out for a mandatory WATCH.
+                indeterminate_time_spread += 1
+        elif not payoff.available:
+            # Truly indeterminate (e.g. missing premium on a static structure).
             indeterminate += 1
         elif payoff.unbounded_loss or payoff.max_loss is None:
             unbounded += 1
         else:
-            loss_magnitude = abs(min(payoff.max_loss, 0.0))
-            total_defined_max_loss += loss_magnitude
-            loss_by_underlying[risk.underlying] = loss_by_underlying.get(risk.underlying, 0.0) + loss_magnitude
+            contribution = abs(min(payoff.max_loss, 0.0))
+            deterministic_defined_max_loss += contribution
 
-        if risk.dte is not None and 0 <= risk.dte <= NEAR_DTE_DAYS and loss_magnitude is not None:
-            near_dte_risk += loss_magnitude
-            near_dte_ids.append(risk.strategy_id)
+        if contribution is not None:
+            combined_by_underlying[risk.underlying] = (
+                combined_by_underlying.get(risk.underlying, 0.0) + contribution
+            )
+            if risk.dte is not None and 0 <= risk.dte <= NEAR_DTE_DAYS:
+                near_dte_risk += contribution
+                near_dte_ids.append(risk.strategy_id)
 
-    if total_defined_max_loss > 0:
+    combined_risk_proxy = deterministic_defined_max_loss + time_spread_net_debit_proxy
+
+    if combined_risk_proxy > 0:
         concentration = tuple(
             sorted(
-                ((u, round(v / total_defined_max_loss, 4)) for u, v in loss_by_underlying.items()),
+                ((u, round(v / combined_risk_proxy, 4)) for u, v in combined_by_underlying.items()),
                 key=lambda kv: kv[1],
                 reverse=True,
             )
@@ -496,11 +599,17 @@ def analyze_portfolio(
         as_of=snapshot.as_of.isoformat(),
         base_currency=snapshot.base_currency,
         strategies=tuple(risks),
-        total_defined_max_loss=round(total_defined_max_loss, 4),
+        deterministic_defined_max_loss=round(deterministic_defined_max_loss, 4),
+        time_spread_net_debit_proxy=round(time_spread_net_debit_proxy, 4),
+        combined_risk_proxy=round(combined_risk_proxy, 4),
         unbounded_loss_strategies=unbounded,
         indeterminate_risk_strategies=indeterminate,
+        indeterminate_time_spread_count=indeterminate_time_spread,
+        approximate_risk_strategies=approximate,
         unclassified_strategies=unclassified,
         concentration_by_underlying=concentration,
+        concentration_basis="combined_risk_proxy",
+        concentration_includes_time_spread=time_spread_net_debit_proxy > 0,
         near_dte_risk=round(near_dte_risk, 4),
         near_dte_strategy_ids=tuple(near_dte_ids),
     )

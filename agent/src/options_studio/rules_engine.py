@@ -209,6 +209,8 @@ def evaluate(
     verdicts.append(_rule_zero_dte(portfolio, limits, severity_cfg))
     verdicts.append(_rule_near_dte(portfolio, limits, severity_cfg))
     verdicts.append(_rule_per_trade_loss(portfolio, limits, severity_cfg, mode))
+    verdicts.append(_rule_assignment_margin(portfolio))
+    verdicts.append(_rule_indeterminate_time_spread(portfolio))
     if include_concentration:
         # Concentration is a PORTFOLIO property; skip it when judging a single
         # candidate in isolation (it would always read 100% of itself).
@@ -321,6 +323,12 @@ def _rule_per_trade_loss(portfolio: PortfolioRisk, limits: dict, severity_cfg: d
     * Finite loss over the cap => BLOCK when proposing a *new* trade, but only a
       WATCH exposure alert when reviewing a position you *already hold* (you
       cannot be blocked out of an existing holding).
+    * Approximate time spreads (PMCC / calendar / diagonal) have no exact max
+      loss, so they are judged on their **net-debit risk proxy** — they must NOT
+      slip past the cap just because ``payoff.available`` is False:
+        - proxy known and over the cap => BLOCK (PROPOSE) / WATCH exposure (REVIEW);
+        - proxy unavailable (net credit / missing cost basis) => fail-closed
+          BLOCK (PROPOSE) / at least WATCH (REVIEW). Never skipped.
     """
     cap = float(limits.get("max_single_trade_loss", 500))
     finite_severity = (
@@ -328,10 +336,29 @@ def _rule_per_trade_loss(portfolio: PortfolioRisk, limits: dict, severity_cfg: d
         if mode == RuleMode.PROPOSE
         else Severity.WATCH
     )
+    # Fail-closed severity for a time spread whose risk cannot even be proxied.
+    indeterminate_severity = Severity.BLOCK if mode == RuleMode.PROPOSE else Severity.WATCH
+
     unbounded: list[dict[str, Any]] = []
     finite: list[dict[str, Any]] = []
+    proxy_over: list[dict[str, Any]] = []
+    proxy_indeterminate: list[dict[str, Any]] = []
     for s in portfolio.strategies:
         payoff = s.payoff
+        if payoff.approximate:
+            # Time spread: use the net debit paid as the capital-at-risk proxy.
+            net_debit = (
+                abs(payoff.net_cash) if payoff.net_cash is not None and payoff.net_cash < 0 else None
+            )
+            if net_debit is None:
+                proxy_indeterminate.append(
+                    {"strategy_id": s.strategy_id, "underlying": s.underlying, "reason": "no net-debit proxy"}
+                )
+            elif net_debit > cap:
+                proxy_over.append(
+                    {"strategy_id": s.strategy_id, "net_debit_proxy": round(net_debit, 4), "underlying": s.underlying}
+                )
+            continue
         if not payoff.available:
             continue
         if payoff.unbounded_loss or payoff.max_loss is None:
@@ -341,11 +368,11 @@ def _rule_per_trade_loss(portfolio: PortfolioRisk, limits: dict, severity_cfg: d
                 {"strategy_id": s.strategy_id, "max_loss": abs(payoff.max_loss), "underlying": s.underlying}
             )
 
-    if not unbounded and not finite:
+    if not (unbounded or finite or proxy_over or proxy_indeterminate):
         return RuleVerdict(
             rule_id="per_trade_max_risk",
             severity=Severity.ALLOW,
-            message=f"All defined-risk strategies are within the per-trade max loss of {cap:g}.",
+            message=f"All strategies are within the per-trade max loss of {cap:g} (time spreads judged on net-debit proxy).",
             details={"cap": cap, "mode": mode.value},
         )
 
@@ -358,15 +385,36 @@ def _rule_per_trade_loss(portfolio: PortfolioRisk, limits: dict, severity_cfg: d
         severity = max(severity, finite_severity)
         label = "exposure alert" if mode == RuleMode.REVIEW else "over the cap"
         parts.append(f"{len(finite)} {label} above {cap:g}")
+    if proxy_over:
+        severity = max(severity, finite_severity)
+        label = "exposure alert" if mode == RuleMode.REVIEW else "over the cap"
+        parts.append(
+            f"{len(proxy_over)} time spread(s) {label} above {cap:g} on net-debit risk proxy "
+            "(not a precise max loss)"
+        )
+    if proxy_indeterminate:
+        severity = max(severity, indeterminate_severity)
+        verb = "BLOCK (fail-closed)" if mode == RuleMode.PROPOSE else "WATCH"
+        parts.append(
+            f"{len(proxy_indeterminate)} time spread(s) with no net-debit risk proxy "
+            f"(net credit / missing cost basis) => {verb}"
+        )
     return RuleVerdict(
         rule_id="per_trade_max_risk",
         severity=severity,
         message="; ".join(parts) + (
             " - held exposure over your preference is a WATCH, not a block."
-            if mode == RuleMode.REVIEW and finite and not unbounded
+            if mode == RuleMode.REVIEW and (finite or proxy_over) and not unbounded
             else "."
         ),
-        details={"unbounded": unbounded, "over_cap": finite, "cap": cap, "mode": mode.value},
+        details={
+            "unbounded": unbounded,
+            "over_cap": finite,
+            "time_spread_proxy_over_cap": proxy_over,
+            "time_spread_no_proxy": proxy_indeterminate,
+            "cap": cap,
+            "mode": mode.value,
+        },
     )
 
 
@@ -398,6 +446,68 @@ def _rule_price_basis(price_basis: PriceBasis) -> RuleVerdict:
     )
 
 
+def _rule_assignment_margin(portfolio: PortfolioRisk) -> RuleVerdict:
+    """WATCH for paired calendar/diagonal/PMCC positions.
+
+    These are NOT unbounded naked shorts (so they do not BLOCK via the per-trade
+    rule), but their true risk cannot be modeled without live option pricing and
+    they carry early-assignment / margin risk. That is a WATCH — never silently
+    treated as zero risk because the model is unavailable.
+    """
+    flagged = [s.strategy_id for s in portfolio.strategies if s.assignment_or_margin_risk]
+    if flagged:
+        return RuleVerdict(
+            rule_id="assignment_or_margin_risk",
+            severity=Severity.WATCH,
+            message=(
+                f"{len(flagged)} calendar/diagonal/PMCC position(s) carry assignment / margin risk; "
+                "their payoff is approximate (no live option pricing) — reviewed, not zero-risk."
+            ),
+            details={"strategy_ids": flagged},
+        )
+    return RuleVerdict(
+        rule_id="assignment_or_margin_risk",
+        severity=Severity.ALLOW,
+        message="No calendar/diagonal/PMCC positions requiring an assignment/margin review.",
+        details={},
+    )
+
+
+def _rule_indeterminate_time_spread(portfolio: PortfolioRisk) -> RuleVerdict:
+    """WATCH when a time spread's capital at risk cannot even be proxied.
+
+    A PMCC / calendar / diagonal with a net credit or a missing cost basis has no
+    net-debit proxy, so it is excluded from the combined risk proxy. It must not
+    be read as zero risk: it is surfaced here as at least a WATCH so the
+    portfolio never *looks* safer because a position could not be quantified.
+    """
+    count = portfolio.indeterminate_time_spread_count
+    if count > 0:
+        return RuleVerdict(
+            rule_id="indeterminate_time_spread",
+            severity=Severity.WATCH,
+            message=(
+                f"{count} time spread(s) (PMCC/calendar/diagonal) have a net credit or missing cost "
+                "basis, so their capital at risk cannot be proxied — excluded from the combined risk "
+                "proxy, reviewed as at least WATCH, never treated as zero risk."
+            ),
+            details={"indeterminate_time_spread_count": count},
+        )
+    return RuleVerdict(
+        rule_id="indeterminate_time_spread",
+        severity=Severity.ALLOW,
+        message="Every time spread has a net-debit capital-at-risk proxy (none unquantifiable).",
+        details={"indeterminate_time_spread_count": 0},
+    )
+
+
+def _concentration_basis_phrase(portfolio: PortfolioRisk) -> str:
+    """Human phrase naming the base concentration is measured against."""
+    if portfolio.concentration_includes_time_spread:
+        return "the combined risk proxy (deterministic defined risk + time-spread net debit)"
+    return "the combined risk proxy (deterministic defined risk)"
+
+
 def _rule_underlying_concentration(portfolio: PortfolioRisk, limits: dict, severity_cfg: dict) -> RuleVerdict:
     threshold = float(limits.get("single_underlying_concentration_pct", 0.35))
     severity = Severity.parse(severity_cfg.get("underlying_over_limit", "watch"))
@@ -406,18 +516,19 @@ def _rule_underlying_concentration(portfolio: PortfolioRisk, limits: dict, sever
         for u, f in portfolio.concentration_by_underlying
         if f > threshold
     ]
+    basis = _concentration_basis_phrase(portfolio)
     if offenders:
         return RuleVerdict(
             rule_id="single_underlying_concentration",
             severity=severity,
-            message=f"{len(offenders)} underlying(s) exceed {threshold:.0%} of total defined risk.",
-            details={"offenders": offenders, "threshold": threshold},
+            message=f"{len(offenders)} underlying(s) exceed {threshold:.0%} of {basis}.",
+            details={"offenders": offenders, "threshold": threshold, "basis": portfolio.concentration_basis},
         )
     return RuleVerdict(
         rule_id="single_underlying_concentration",
         severity=Severity.ALLOW,
-        message=f"No single underlying exceeds {threshold:.0%} of total defined risk.",
-        details={"threshold": threshold},
+        message=f"No single underlying exceeds {threshold:.0%} of {basis}.",
+        details={"threshold": threshold, "basis": portfolio.concentration_basis},
     )
 
 
@@ -438,16 +549,17 @@ def _rule_theme_concentration(portfolio: PortfolioRisk, rules: dict, limits: dic
                     "fraction": combined,
                 }
             )
+    basis = _concentration_basis_phrase(portfolio)
     if offenders:
         return RuleVerdict(
             rule_id="theme_concentration",
             severity=severity,
-            message=f"{len(offenders)} theme(s) exceed {threshold:.0%} of total defined risk.",
-            details={"offenders": offenders, "threshold": threshold},
+            message=f"{len(offenders)} theme(s) exceed {threshold:.0%} of {basis}.",
+            details={"offenders": offenders, "threshold": threshold, "basis": portfolio.concentration_basis},
         )
     return RuleVerdict(
         rule_id="theme_concentration",
         severity=Severity.ALLOW,
-        message=f"No correlated theme exceeds {threshold:.0%} of total defined risk.",
-        details={"threshold": threshold},
+        message=f"No correlated theme exceeds {threshold:.0%} of {basis}.",
+        details={"threshold": threshold, "basis": portfolio.concentration_basis},
     )

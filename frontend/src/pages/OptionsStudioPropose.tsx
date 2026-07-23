@@ -31,6 +31,7 @@ interface LegForm {
 
 interface Payoff {
   available: boolean;
+  approximate?: boolean;
   max_profit: number | null;
   max_loss: number | null;
   breakevens: number[];
@@ -44,12 +45,20 @@ interface StrategyRisk {
   underlying: string;
   dte: number | null;
   payoff: Payoff;
+  assignment_or_margin_risk?: boolean;
 }
 
 interface PortfolioRisk {
   total_defined_max_loss: number;
+  deterministic_defined_max_loss?: number;
+  time_spread_net_debit_proxy?: number;
+  combined_risk_proxy?: number;
   unbounded_loss_strategies: number;
+  approximate_risk_strategies?: number;
+  indeterminate_time_spread_count?: number;
   near_dte_risk: number;
+  base_currency?: string | null;
+  concentration_includes_time_spread?: boolean;
   strategies: StrategyRisk[];
 }
 
@@ -71,6 +80,9 @@ interface CardPayload {
   rules_portfolio: { overall: Severity; verdicts: Verdict[] };
   deltas: {
     total_defined_max_loss: number;
+    deterministic_defined_max_loss?: number;
+    time_spread_net_debit_proxy?: number;
+    combined_risk_proxy?: number;
     unbounded_loss_strategies: number;
     near_dte_risk: number;
     held_option_count: number;
@@ -91,21 +103,24 @@ type ProposeResponse = CardPayload | ErrorPayload;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function money(v: number | null | undefined): string {
+function money(v: number | null | undefined, ccy: string): string {
   if (v === null || v === undefined) return "—";
-  return v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const code = ccy && ccy !== "?" ? ccy : "?";
+  return `${code} ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function payoffLoss(p: Payoff): string {
+function payoffLoss(p: Payoff, ccy: string): string {
+  if (p.approximate) return "approximate";
   if (!p.available) return "unavailable";
   if (p.unbounded_loss || p.max_loss === null) return "unbounded";
-  return money(p.max_loss);
+  return money(p.max_loss, ccy);
 }
 
-function payoffProfit(p: Payoff): string {
+function payoffProfit(p: Payoff, ccy: string): string {
+  if (p.approximate) return "approximate";
   if (!p.available) return "unavailable";
   if (p.unbounded_profit || p.max_profit === null) return "unbounded";
-  return money(p.max_profit);
+  return money(p.max_profit, ccy);
 }
 
 const SEV_STYLES: Record<Severity, string> = {
@@ -353,6 +368,7 @@ function priceBasisBanner(basis: PriceBasis) {
 
 function ProposalCard({ card }: { card: CardPayload }) {
   const d = card.deltas;
+  const ccy = card.portfolio_after.base_currency ?? card.held_before.base_currency ?? "?";
   return (
     <div className="space-y-4">
       {/* Decision */}
@@ -396,15 +412,22 @@ function ProposalCard({ card }: { card: CardPayload }) {
             <tbody>
               {card.proposed.strategies.map((s) => (
                 <tr key={s.strategy_id} className="border-b last:border-0">
-                  <td className="p-3 capitalize">{humanType(s.strategy_type)}</td>
+                  <td className="p-3 capitalize">
+                    {humanType(s.strategy_type)}
+                    {s.assignment_or_margin_risk && (
+                      <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-600" title="assignment / margin risk; payoff approximate">
+                        assign/margin
+                      </span>
+                    )}
+                  </td>
                   <td className="p-3 font-medium">{s.underlying}</td>
                   <td className="p-3 tabular-nums">{s.dte ?? "—"}</td>
                   <td className="p-3 text-right tabular-nums">
                     <span className={s.payoff.unbounded_loss ? "font-semibold text-red-600" : undefined}>
-                      {payoffLoss(s.payoff)}
+                      {payoffLoss(s.payoff, ccy)}
                     </span>
                   </td>
-                  <td className="p-3 text-right tabular-nums">{payoffProfit(s.payoff)}</td>
+                  <td className="p-3 text-right tabular-nums">{payoffProfit(s.payoff, ccy)}</td>
                   <td className="p-3 tabular-nums text-muted-foreground">
                     {s.payoff.available && s.payoff.breakevens.length
                       ? s.payoff.breakevens.map((b) => b.toFixed(2)).join(", ")
@@ -434,10 +457,32 @@ function ProposalCard({ card }: { card: CardPayload }) {
             </thead>
             <tbody>
               <tr className="border-b">
-                <td className="p-2">Total defined max loss</td>
-                <td className="p-2 text-right tabular-nums">{money(card.held_before.total_defined_max_loss)}</td>
-                <td className="p-2 text-right tabular-nums">{money(card.portfolio_after.total_defined_max_loss)}</td>
-                <td className="p-2 text-right tabular-nums">{money(d.total_defined_max_loss)}</td>
+                <td className="p-2">Deterministic defined max loss</td>
+                <td className="p-2 text-right tabular-nums">
+                  {money(card.held_before.deterministic_defined_max_loss ?? card.held_before.total_defined_max_loss, ccy)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {money(card.portfolio_after.deterministic_defined_max_loss ?? card.portfolio_after.total_defined_max_loss, ccy)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {money(d.deterministic_defined_max_loss ?? d.total_defined_max_loss, ccy)}
+                </td>
+              </tr>
+              <tr className="border-b">
+                <td className="p-2">Time-spread net-debit proxy <span className="text-muted-foreground">(approximate)</span></td>
+                <td className="p-2 text-right tabular-nums">{money(card.held_before.time_spread_net_debit_proxy ?? 0, ccy)}</td>
+                <td className="p-2 text-right tabular-nums">{money(card.portfolio_after.time_spread_net_debit_proxy ?? 0, ccy)}</td>
+                <td className="p-2 text-right tabular-nums">{money(d.time_spread_net_debit_proxy ?? 0, ccy)}</td>
+              </tr>
+              <tr className="border-b">
+                <td className="p-2">Combined risk proxy <span className="text-muted-foreground">(not a precise max loss)</span></td>
+                <td className="p-2 text-right tabular-nums">
+                  {money(card.held_before.combined_risk_proxy ?? card.held_before.total_defined_max_loss, ccy)}
+                </td>
+                <td className="p-2 text-right tabular-nums">
+                  {money(card.portfolio_after.combined_risk_proxy ?? card.portfolio_after.total_defined_max_loss, ccy)}
+                </td>
+                <td className="p-2 text-right tabular-nums">{money(d.combined_risk_proxy ?? 0, ccy)}</td>
               </tr>
               <tr className="border-b">
                 <td className="p-2">Unbounded-loss strategies</td>
@@ -448,15 +493,19 @@ function ProposalCard({ card }: { card: CardPayload }) {
                 </td>
               </tr>
               <tr>
-                <td className="p-2">Near-DTE risk</td>
-                <td className="p-2 text-right tabular-nums">{money(card.held_before.near_dte_risk)}</td>
-                <td className="p-2 text-right tabular-nums">{money(card.portfolio_after.near_dte_risk)}</td>
-                <td className="p-2 text-right tabular-nums">{money(d.near_dte_risk)}</td>
+                <td className="p-2">Near-DTE risk <span className="text-muted-foreground">(of combined proxy)</span></td>
+                <td className="p-2 text-right tabular-nums">{money(card.held_before.near_dte_risk, ccy)}</td>
+                <td className="p-2 text-right tabular-nums">{money(card.portfolio_after.near_dte_risk, ccy)}</td>
+                <td className="p-2 text-right tabular-nums">{money(d.near_dte_risk, ccy)}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
+          Real option prices / IV are required to model a precise maximum loss for time spreads; the net debit is only a
+          risk proxy, not a quote or margin figure.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
           Held option lines: {d.held_option_count} (unchanged) · candidate option lines: {d.proposed_option_count}{" "}
           (kept separate)
         </p>

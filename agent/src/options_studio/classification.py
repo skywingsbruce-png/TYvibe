@@ -140,6 +140,13 @@ def _classify_underlying(
     strategies.extend(_match_verticals(underlying, long_calls, short_calls, OptionRight.CALL, as_of, counter))
     strategies.extend(_match_verticals(underlying, long_puts, short_puts, OptionRight.PUT, as_of, counter))
 
+    # 3.5) Calendar / diagonal call spreads — a short call whose expiry is
+    # EARLIER than a same-underlying long call. Paired here, BEFORE the naked
+    # short-call fallback, so a short call covered by a longer-dated long call is
+    # never mislabeled as an unbounded naked short. This is intentionally NOT
+    # gated on the strict PMCC "long leg >= 270 DTE" rule.
+    strategies.extend(_match_calendar_diagonal(underlying, long_calls, short_calls, counter))
+
     # 4) Remaining short puts — cash-secured when free cash covers assignment.
     for sp in short_puts:
         while sp.remaining > 0:
@@ -211,6 +218,50 @@ def _match_verticals(
                         underlying=underlying,
                         option_legs=(OptionLeg(lu.contract, 1), OptionLeg(su.contract, -1)),
                         note=f"Vertical {right.value} spread ({'debit' if debit else 'credit'}).",
+                    )
+                )
+                lu.remaining -= 1
+                su.remaining -= 1
+    return out
+
+
+def _match_calendar_diagonal(
+    underlying: str,
+    long_calls: list[_Unit],
+    short_calls: list[_Unit],
+    counter: _IdCounter,
+) -> list[Strategy]:
+    """Pair a short call with a longer-dated long call (calendar/diagonal).
+
+    Requirements: 1:1 pairing, same underlying, long-call expiry strictly AFTER
+    the short-call expiry, and equal multipliers. Same strike => calendar; a
+    different strike => diagonal. These are NOT unbounded-loss positions: the
+    short call is covered by the longer-dated long call; they carry
+    assignment / margin risk instead.
+    """
+    out: list[Strategy] = []
+    for lu in long_calls:
+        for su in short_calls:
+            while (
+                lu.remaining > 0
+                and su.remaining > 0
+                and lu.contract.expiry > su.contract.expiry
+                and lu.contract.multiplier == su.contract.multiplier
+            ):
+                same_strike = lu.contract.strike == su.contract.strike
+                stype = StrategyType.CALENDAR_CALL_SPREAD if same_strike else StrategyType.DIAGONAL_CALL_SPREAD
+                kind = "Calendar" if same_strike else "Diagonal"
+                out.append(
+                    Strategy(
+                        strategy_id=counter.next(),
+                        strategy_type=stype,
+                        underlying=underlying,
+                        option_legs=(OptionLeg(lu.contract, 1), OptionLeg(su.contract, -1)),
+                        note=(
+                            f"{kind} call spread: the short call expires before the longer-dated long "
+                            "call, which covers it. Not an unbounded naked short — carries "
+                            "assignment / margin risk; static payoff is approximate without live pricing."
+                        ),
                     )
                 )
                 lu.remaining -= 1

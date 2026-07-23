@@ -359,6 +359,14 @@ def evaluate_proposal(
 
     overall = max(rules_candidate.overall, rules_portfolio.overall)
     deltas = {
+        "deterministic_defined_max_loss": round(
+            after.deterministic_defined_max_loss - before.deterministic_defined_max_loss, 4
+        ),
+        "time_spread_net_debit_proxy": round(
+            after.time_spread_net_debit_proxy - before.time_spread_net_debit_proxy, 4
+        ),
+        "combined_risk_proxy": round(after.combined_risk_proxy - before.combined_risk_proxy, 4),
+        # Backward-compatible alias (== deterministic delta); not the full risk.
         "total_defined_max_loss": round(after.total_defined_max_loss - before.total_defined_max_loss, 4),
         "unbounded_loss_strategies": after.unbounded_loss_strategies - before.unbounded_loss_strategies,
         "near_dte_risk": round(after.near_dte_risk - before.near_dte_risk, 4),
@@ -385,10 +393,11 @@ def evaluate_proposal(
 # ---------------------------------------------------------------------------
 
 
-def _fmt_money(value: Optional[float]) -> str:
+def _fmt_money(value: Optional[float], currency: str = "?") -> str:
     if value is None:
         return "unbounded/undefined"
-    return f"${value:,.2f}"
+    code = currency or "?"
+    return f"{code} {value:,.2f}"
 
 
 def _price_basis_banner(price_basis: PriceBasis) -> str:
@@ -412,6 +421,11 @@ def _render_card(
     overall: Severity,
     deltas: dict[str, Any],
 ) -> str:
+    ccy = before.base_currency or "?"
+
+    def money(value: Optional[float]) -> str:
+        return _fmt_money(value, ccy)
+
     lines: list[str] = []
     lines.append("# Options Risk Studio - Proposed Trade Authorization")
     lines.append("")
@@ -447,11 +461,15 @@ def _render_card(
     lines.append("|----|----------|-----|----------|-----------|-----------|")
     for r in proposed_risk.strategies:
         p = r.payoff
-        if not p.available:
+        if p.approximate:
+            debit = money(abs(p.net_cash)) if p.net_cash is not None and p.net_cash < 0 else None
+            ml = mp = f"approximate (net debit {debit})" if debit else "approximate"
+            be = "-"
+        elif not p.available:
             ml = mp = be = "unavailable"
         else:
-            ml = "unbounded" if p.unbounded_loss else _fmt_money(p.max_loss)
-            mp = "unbounded" if p.unbounded_profit else _fmt_money(p.max_profit)
+            ml = "unbounded" if p.unbounded_loss else money(p.max_loss)
+            mp = "unbounded" if p.unbounded_profit else money(p.max_profit)
             be = ", ".join(f"{b:,.2f}" for b in p.breakevens) if p.breakevens else "-"
         dte = r.dte if r.dte is not None else "-"
         lines.append(f"| {r.strategy_id} | {r.strategy_type} | {dte} | {ml} | {mp} | {be} |")
@@ -462,16 +480,28 @@ def _render_card(
     lines.append("")
     lines.append("| Metric | Before (held) | After | Delta |")
     lines.append("|--------|---------------|-------|-------|")
-    lines.append(f"| Total defined max loss | {_fmt_money(before.total_defined_max_loss)} | "
-                 f"{_fmt_money(after.total_defined_max_loss)} | {_fmt_money(deltas['total_defined_max_loss'])} |")
+    lines.append(f"| Deterministic defined max loss | {money(before.deterministic_defined_max_loss)} | "
+                 f"{money(after.deterministic_defined_max_loss)} | {money(deltas['deterministic_defined_max_loss'])} |")
+    lines.append(f"| Time-spread net-debit proxy (approximate) | {money(before.time_spread_net_debit_proxy)} | "
+                 f"{money(after.time_spread_net_debit_proxy)} | {money(deltas['time_spread_net_debit_proxy'])} |")
+    lines.append(f"| Combined risk proxy (not a precise max loss) | {money(before.combined_risk_proxy)} | "
+                 f"{money(after.combined_risk_proxy)} | {money(deltas['combined_risk_proxy'])} |")
     lines.append(f"| Unbounded-loss strategies | {before.unbounded_loss_strategies} | "
                  f"{after.unbounded_loss_strategies} | {deltas['unbounded_loss_strategies']:+d} |")
-    lines.append(f"| Near-DTE risk | {_fmt_money(before.near_dte_risk)} | "
-                 f"{_fmt_money(after.near_dte_risk)} | {_fmt_money(deltas['near_dte_risk'])} |")
+    lines.append(f"| Near-DTE risk (of combined proxy) | {money(before.near_dte_risk)} | "
+                 f"{money(after.near_dte_risk)} | {money(deltas['near_dte_risk'])} |")
+    lines.append("")
+    lines.append("> Real option prices / IV are required to model a precise maximum loss for time "
+                 "spreads; the net debit is only a risk proxy, not a quote or margin figure.")
     lines.append("")
     if after.concentration_by_underlying:
         conc = ", ".join(f"{u} {f:.0%}" for u, f in after.concentration_by_underlying)
-        lines.append(f"- After concentration by underlying: {conc}")
+        basis = (
+            "combined risk proxy incl. time-spread net debit"
+            if after.concentration_includes_time_spread
+            else "combined risk proxy (deterministic only)"
+        )
+        lines.append(f"- After concentration by underlying (of {basis}): {conc}")
     lines.append(f"- Held option lines: {deltas['held_option_count']} (unchanged); "
                  f"candidate option lines: {deltas['proposed_option_count']} (kept separate)")
     lines.append("")

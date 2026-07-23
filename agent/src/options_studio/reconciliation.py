@@ -156,10 +156,12 @@ def _detect_duplicates(snapshot: PortfolioSnapshot) -> tuple[ParseWarning, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _fmt_money(value: Optional[float]) -> str:
+def _fmt_money(value: Optional[float], currency: str) -> str:
+    # Use the statement's actual currency code (no FX conversion, no hardcoded $).
     if value is None:
         return "unbounded/undefined"
-    return f"${value:,.2f}"
+    code = (currency or "").strip() or "?"
+    return f"{code} {value:,.2f}"
 
 
 def _render_report(
@@ -168,6 +170,11 @@ def _render_report(
     rules: RulesReport,
     warnings: tuple[ParseWarning, ...],
 ) -> str:
+    ccy = snapshot.base_currency or "?"
+
+    def money(value: Optional[float]) -> str:
+        return _fmt_money(value, ccy)
+
     lines: list[str] = []
     lines.append("# Options Risk Studio - Reconciliation Report")
     lines.append("")
@@ -184,7 +191,7 @@ def _render_report(
     lines.append("")
     lines.append(f"- Stock positions: **{len(snapshot.underlyings)}**")
     lines.append(f"- Option positions: **{len(snapshot.options)}**")
-    lines.append(f"- Cash (base currency): **{_fmt_money(snapshot.cash)}**")
+    lines.append(f"- Cash ({ccy}): **{money(snapshot.cash)}**")
     lines.append(f"- Trade fills: **{len(snapshot.trade_lots)}**")
     lines.append(f"- Parser/reconciliation warnings: **{len(warnings)}**")
     lines.append("")
@@ -221,12 +228,18 @@ def _render_report(
             r = risk_by_id.get(strat.strategy_id)
             payoff = r.payoff if r else None
             dte = r.dte if r and r.dte is not None else "-"
-            if payoff is None or not payoff.available:
+            if payoff is not None and payoff.approximate:
+                # Diagonal/PMCC: do not emit a misleading intrinsic-only number.
+                debit = money(abs(payoff.net_cash)) if payoff.net_cash is not None else "unavailable"
+                max_loss = f"approximate (net debit {debit})"
+                max_profit = "approximate"
+                bes = "approximate"
+            elif payoff is None or not payoff.available:
                 max_loss = max_profit = "unavailable"
                 bes = "unavailable"
             else:
-                max_loss = "unbounded" if payoff.unbounded_loss else _fmt_money(payoff.max_loss)
-                max_profit = "unbounded" if payoff.unbounded_profit else _fmt_money(payoff.max_profit)
+                max_loss = "unbounded" if payoff.unbounded_loss else money(payoff.max_loss)
+                max_profit = "unbounded" if payoff.unbounded_profit else money(payoff.max_profit)
                 bes = ", ".join(f"{b:,.2f}" for b in payoff.breakevens) if payoff.breakevens else "-"
             lines.append(
                 f"| {strat.strategy_id} | {strat.underlying} | {strat.strategy_type.value} | {dte} | "
@@ -273,13 +286,45 @@ def _render_report(
     # 6) Portfolio aggregates
     lines.append("## 6. Portfolio aggregates")
     lines.append("")
-    lines.append(f"- Total defined max loss: **{_fmt_money(portfolio.total_defined_max_loss)}**")
+    lines.append(
+        "These three amounts are kept separate on purpose — do **not** read any single one as "
+        "the portfolio's complete maximum loss:"
+    )
+    lines.append("")
+    lines.append(
+        f"- **Deterministic defined max loss**: **{money(portfolio.deterministic_defined_max_loss)}** "
+        "— exact static risk of verticals, long calls/puts, short puts, covered calls, etc."
+    )
+    lines.append(
+        f"- **Time-spread net-debit risk proxy**: **{money(portfolio.time_spread_net_debit_proxy)}** "
+        f"_(approximate; {portfolio.approximate_risk_strategies} PMCC/calendar/diagonal position(s))_ "
+        "— the net debit paid, a conservative capital-at-risk proxy only."
+    )
+    lines.append(
+        f"- **Combined risk proxy**: **{money(portfolio.combined_risk_proxy)}** "
+        "_(not a precise maximum loss)_ — the two above summed, used for exposure/concentration ranking."
+    )
+    lines.append("")
+    lines.append(
+        "> Real option prices / IV are required to model a precise maximum loss for time spreads; "
+        "the net debit is only a risk proxy, not a quote or margin figure."
+    )
+    lines.append("")
     lines.append(f"- Strategies with unbounded loss: **{portfolio.unbounded_loss_strategies}**")
+    lines.append(
+        "- Time spreads with net credit / missing cost basis (excluded from the proxy, not zero risk): "
+        f"**{portfolio.indeterminate_time_spread_count}**"
+    )
     lines.append(f"- Strategies with indeterminate risk (missing cost basis): **{portfolio.indeterminate_risk_strategies}**")
-    lines.append(f"- Near-{_near_dte()}-DTE risk: **{_fmt_money(portfolio.near_dte_risk)}**")
+    lines.append(f"- Near-{_near_dte()}-DTE risk (of combined proxy): **{money(portfolio.near_dte_risk)}**")
     if portfolio.concentration_by_underlying:
         conc = ", ".join(f"{u} {f:.0%}" for u, f in portfolio.concentration_by_underlying)
-        lines.append(f"- Concentration by underlying (of defined risk): {conc}")
+        basis = (
+            "combined risk proxy incl. time-spread net debit"
+            if portfolio.concentration_includes_time_spread
+            else "combined risk proxy (deterministic only)"
+        )
+        lines.append(f"- Concentration by underlying (of {basis}): {conc}")
     lines.append("")
 
     # 7) Cannot verify
