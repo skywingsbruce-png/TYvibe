@@ -1,3 +1,10 @@
+> **Personal fork.** This is a personal, local, **read-only** research and
+> simulation aid — not investment advice and with **no automatic order
+> placement**. Keep all real data in the git-ignored `data/private/`; never
+> commit real statements, positions, chat exports, or API keys.
+> See **[README_PERSONAL_FORK.md](README_PERSONAL_FORK.md)** before using it.
+> Upstream project: [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading).
+
 <p align="center">
   <b>English</b> | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> | <a href="README_ko.md">한국어</a> | <a href="README_ar.md">العربية</a>
 </p>
