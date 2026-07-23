@@ -48,8 +48,15 @@ def _window_desc(horizon: str, windows: dict[str, int]) -> str:
     return f"{value}h" if is_hours else f"{value}d"
 
 
-def build_current(notes: list[MarketNote], *, now: datetime, windows: dict[str, int]) -> dict:
-    """Build the time-windowed current-conclusion card payload."""
+def select_current_notes(
+    notes: list[MarketNote], *, now: datetime, windows: dict[str, int]
+) -> tuple[list[tuple[MarketNote, datetime]], int, int]:
+    """Select only timestamped notes that belong in the current window.
+
+    The deterministic card and any optional LLM augmentation must consume this
+    exact same selection. Unknown-time and stale notes remain visible in
+    history, but are never evidence for a current conclusion.
+    """
     included: list[tuple[MarketNote, datetime]] = []
     excluded_unknown_time = 0
     excluded_stale = 0
@@ -63,6 +70,15 @@ def build_current(notes: list[MarketNote], *, now: datetime, windows: dict[str, 
             included.append((note, parsed))
         else:
             excluded_stale += 1
+
+    return included, excluded_unknown_time, excluded_stale
+
+
+def build_current(notes: list[MarketNote], *, now: datetime, windows: dict[str, int]) -> dict:
+    """Build the time-windowed current-conclusion card payload."""
+    included, excluded_unknown_time, excluded_stale = select_current_notes(
+        notes, now=now, windows=windows
+    )
 
     windows_desc = {
         "intraday": _window_desc("intraday", windows),

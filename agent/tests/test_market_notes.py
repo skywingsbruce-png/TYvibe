@@ -161,6 +161,25 @@ def test_current_conclusions_are_cited(monkeypatch, tmp_path):
             assert c["citations"]
 
 
+def test_llm_receives_only_notes_inside_current_window(monkeypatch, tmp_path):
+    """Stale and timestamp-less history must never reach the optional LLM."""
+    captured = []
+
+    def _capture(notes):
+        captured.extend(notes)
+        return []
+
+    monkeypatch.setattr(notes_llm, "generate_llm_conclusions", _capture)
+    bundle = _build(monkeypatch, tmp_path, datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc))
+
+    assert bundle["current"]["available"] is True
+    assert captured
+    captured_ids = {note.note_id for note in captured}
+    history_ids = {note["note_id"] for note in bundle["notes"]}
+    assert captured_ids < history_ids
+    assert all(note.timestamp is not None for note in captured)
+
+
 # ---------------------------------------------------------------------------
 # Fix 1 — LLM privacy / consent
 # ---------------------------------------------------------------------------

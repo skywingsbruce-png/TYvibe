@@ -66,12 +66,15 @@ def build_notes_bundle(now: Optional[datetime] = None) -> dict:
             seen_ids.add(note.note_id)
             notes.append(note)
 
+    current_notes, _unknown_time, _stale = _conclusions.select_current_notes(
+        notes, now=now, windows=config.windows
+    )
     current = _conclusions.build_current(notes, now=now, windows=config.windows)
 
     # Optional LLM conclusions augment the CURRENT card only, and only with
     # explicit remote consent. Fully offline otherwise.
     if current["available"]:
-        llm_conclusions = _llm.generate_llm_conclusions(notes)
+        llm_conclusions = _llm.generate_llm_conclusions([note for note, _dt in current_notes])
         current["conclusions"].extend(c.to_dict() for c in llm_conclusions)
 
     note_symbols = {s for n in notes for s in n.symbols}
