@@ -1,9 +1,117 @@
-> **Personal fork.** This is a personal, local, **read-only** research and
-> simulation aid — not investment advice and with **no automatic order
-> placement**. Keep all real data in the git-ignored `data/private/`; never
-> commit real statements, positions, chat exports, or API keys.
-> See **[README_PERSONAL_FORK.md](README_PERSONAL_FORK.md)** before using it.
-> Upstream project: [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading).
+<h1 align="center">TYvibe — US Options & Portfolio Risk Workbench</h1>
+
+<p align="center">
+  <b>Read-only · No automatic order placement · Not investment advice</b>
+</p>
+
+TYvibe is a personal workbench for **US equity and options** research. It parses
+your own Interactive Brokers statements **locally**, identifies the option
+strategies you actually hold, aggregates portfolio risk into clearly separated
+numbers, reviews existing positions against hard rules, and audits the market
+opinions you collect.
+
+Everything runs on your own machine and is **read-only**. No broker connector is
+wired to trade; a fail-closed guard refuses to run if a real-trading toggle is
+ever set; and the "propose a trade" screen only prints a rule-check decision
+card — it never places, routes, or modifies an order. Values that would require
+live market data are reported as **unavailable rather than simulated**.
+
+**This is a personal research and simulation aid. It is not investment advice.**
+
+> Built on [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) (MIT —
+> see [LICENSE](LICENSE)); not affiliated with or endorsed by the upstream
+> authors. Upstream's full documentation is preserved further down this page.
+> Privacy and contribution rules for this fork:
+> [README_PERSONAL_FORK.md](README_PERSONAL_FORK.md).
+
+---
+
+## Core entry points
+
+### 🧮 Options Studio — [module docs](agent/src/options_studio/README.md) · [code](agent/src/options_studio/)
+
+Local IBKR CSV parsing (Activity Statement + Flex Query, English and Chinese
+column headings). Recognizes **PMCC, bull put / bull call verticals, calendar
+and diagonal call spreads**, covered calls, cash-secured puts, LEAPS — anything
+it cannot identify with confidence stays `unclassified` rather than being given
+a wrong name.
+
+Risk is aggregated into **three amounts that are never conflated**: the
+deterministic defined max loss, a time-spread net-debit risk proxy (approximate,
+for PMCC/calendar/diagonal), and a combined risk proxy used only for
+concentration ranking. Covers both **held-position review** and a **proposed-trade
+authorization card**, each with `ALLOW / WATCH / BLOCK` verdicts.
+
+New here? Start with the plain-language guide:
+**[docs/OPTIONS_STUDIO_GUIDE.md](docs/OPTIONS_STUDIO_GUIDE.md)**.
+
+### 📝 Market Notes — [module docs](agent/src/market_notes/README.md) · [code](agent/src/market_notes/)
+
+Turns locally imported chat/notes into structured opinion records with
+**evidence back-links** and time-windowed **current-conclusion cards**. Stale or
+undated notes stay visible in history but never become evidence for a current
+conclusion. The optional LLM layer is **off by default** and gated behind
+explicit consent.
+
+### 📡 Market Radar — [code](agent/src/market_radar/) · [config](config/market_radar.yaml)
+
+US sector/theme relative strength and a ranked **candidate watchlist**.
+Candidates are transparent ranking inputs for further research — **not buy
+instructions**. The scanner submits no orders. Event risk is reported as
+unavailable until you mark your local event calendar complete.
+
+---
+
+## Local usage
+
+### 1. Install dependencies
+
+Do the upstream [Quick Start](#-quick-start) below once to set up the Python
+environment and Node dependencies.
+
+### 2. Build the web UI and start the local server
+
+```bash
+cd frontend && npm install && npm run build
+```
+
+```bash
+cd agent && python -m cli serve --host 127.0.0.1 --port 8899
+```
+
+### 3. Open the workbench
+
+```
+http://127.0.0.1:8899/options-studio
+```
+
+Market Notes is at `/market-notes` and Market Radar at `/market-radar`.
+With no statement of your own present, the UI runs on a bundled **fictional**
+sample and says so.
+
+### 4. Point it at your own statement
+
+Export your IBKR **Activity Statement (CSV)** and save it as
+`data/private/ibkr_statement.csv`. That whole directory is git-ignored, so your
+real data never enters version control. Reload the page, or run a read-only
+review from the CLI:
+
+```bash
+cd agent && python -m cli options-studio review --file ../data/private/ibkr_statement.csv
+```
+
+Reports are written to `data/private/outputs/` (also git-ignored).
+
+> **Never** commit a real statement, account number, position, cash balance, or
+> chat export — not in code, tests, fixtures, docs, or comments. Every sample in
+> this repository is fictional by construction and labelled as such.
+
+---
+
+<p align="center">
+  <b>Below: upstream Vibe-Trading documentation</b><br>
+  <sub>The general-purpose trading-agent platform this workbench is built on.</sub>
+</p>
 
 <p align="center">
   <b>English</b> | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> | <a href="README_ko.md">한국어</a> | <a href="README_ar.md">العربية</a>
@@ -13,7 +121,7 @@
   <img src="assets/icon.png" width="120" alt="Vibe-Trading Logo"/>
 </p>
 
-<h1 align="center">Vibe-Trading: Your Personal Trading Agent</h1>
+<h2 align="center">Vibe-Trading: Your Personal Trading Agent</h2>
 
 <p align="center">
   <b>One Command to Empower Your Agent with Comprehensive Trading Capabilities</b>

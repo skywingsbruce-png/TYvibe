@@ -53,8 +53,10 @@ data/.duckdb_tmp/
 data/parquet/
 data/backup/
 
-# Internal docs (plans, specs)
-docs/
+# Internal docs (plans, specs) stay local. Public, user-facing guides are
+# re-included explicitly, one file at a time.
+docs/*
+!docs/OPTIONS_STUDIO_GUIDE.md
 !wiki/docs/
 !wiki/docs/**
 docs/screenshots/agent-run.png
