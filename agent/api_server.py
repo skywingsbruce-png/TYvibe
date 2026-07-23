@@ -282,6 +282,10 @@ register_options_studio_routes(app)
 from src.api.market_notes_routes import register_market_notes_routes  # noqa: E402
 register_market_notes_routes(app)
 
+# --- Market / sector radar (public daily data, local read-only) ---
+from src.api.market_radar_routes import register_market_radar_routes  # noqa: E402
+register_market_radar_routes(app)
+
 # --- Auth helpers (SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)

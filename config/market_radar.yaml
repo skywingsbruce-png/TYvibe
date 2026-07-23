@@ -1,0 +1,59 @@
+# Read-only US market radar configuration.
+#
+# Scores are transparent candidate-ranking inputs, never trade instructions.
+# Keep event dates current locally; the radar will surface missing event data
+# instead of assuming that an earnings or macro event is safe.
+
+benchmarks:
+  broad_market: SPY
+  growth_market: QQQ
+
+themes:
+  semiconductors:
+    label: Semiconductors
+    etfs: [SMH, SOXX]
+    symbols: [NVDA, AMD, AVGO, TSM, MU, SNDK, WDC, STX, MRVL, SOXL]
+  software:
+    label: Software
+    etfs: [IGV, XLK]
+    symbols: [MSFT, ORCL, PLTR, NFLX]
+  mag7:
+    label: Mega-cap technology
+    etfs: [MAGS, QQQ]
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA]
+  optical_networking:
+    label: Optical networking
+    etfs: []
+    symbols: [LITE, CIEN, COHR, AAOI]
+
+# Candidates are ranked into a watchlist only. The scanner does not submit
+# orders and does not claim to identify institutional flows.
+candidates:
+  - NVDA
+  - TSM
+  - MU
+  - SNDK
+  - AVGO
+  - MRVL
+  - MSFT
+  - META
+  - LITE
+  - CIEN
+  - COHR
+  - AAOI
+
+# Add known macro or earnings dates here when you want an explicit event gate.
+# Example:
+# events:
+#   - name: CPI
+#     date: "2026-08-12"
+#     symbols: []
+#   - name: NVDA earnings
+#     date: "2026-08-26"
+#     symbols: [NVDA]
+events: []
+event_window_days: 7
+# Keep false until the local event list includes the earnings and macro events
+# you intend to guard. While false, event risk is reported as unavailable and
+# contributes no points to a candidate score.
+event_calendar_complete: false

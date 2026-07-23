@@ -19,6 +19,7 @@ const PROXY_PATHS = [
   "/options-studio/propose",
   // Market Notes API. Exact path so the SPA route "/market-notes" is not proxied.
   "/market-notes/data",
+  "/market-radar/data",
 ];
 
 export default defineConfig(({ mode }) => {

@@ -34,6 +34,9 @@ const OptionsStudioPropose = lazy(() =>
 const MarketNotes = lazy(() =>
   import("@/pages/MarketNotes").then((m) => ({ default: m.MarketNotes })),
 );
+const MarketRadar = lazy(() =>
+  import("@/pages/MarketRadar").then((m) => ({ default: m.MarketRadar })),
+);
 
 function PageLoader() {
   return (
@@ -70,6 +73,7 @@ export const router = createBrowserRouter([
       { path: "/options-studio", element: wrap(OptionsStudio) },
       { path: "/options-studio/propose", element: wrap(OptionsStudioPropose) },
       { path: "/market-notes", element: wrap(MarketNotes) },
+      { path: "/market-radar", element: wrap(MarketRadar) },
     ],
   },
 ]);
