@@ -1,7 +1,7 @@
 <h1 align="center">TYvibe — US Options & Portfolio Risk Workbench</h1>
 
 <p align="center">
-  <b>Read-only · No automatic order placement · Not investment advice</b>
+  <b>Read-only workbench · No automatic order placement · Not investment advice</b>
 </p>
 
 TYvibe is a personal workbench for **US equity and options** research. It parses
@@ -10,11 +10,16 @@ strategies you actually hold, aggregates portfolio risk into clearly separated
 numbers, reviews existing positions against hard rules, and audits the market
 opinions you collect.
 
-Everything runs on your own machine and is **read-only**. No broker connector is
-wired to trade; a fail-closed guard refuses to run if a real-trading toggle is
-ever set; and the "propose a trade" screen only prints a rule-check decision
-card — it never places, routes, or modifies an order. Values that would require
-live market data are reported as **unavailable rather than simulated**.
+**Scope of the read-only guarantee.** TYvibe's workbench modules — Options
+Studio, Market Notes and Market Radar — are all local and read-only: they
+connect to no broker for order entry, and they never route or modify an order.
+Other capabilities that may exist in the upstream general-purpose platform are
+outside this workbench's scope and should not be configured for real trading.
+
+Within the workbench, a fail-closed guard refuses to run if a real-trading
+toggle is ever set, and the "propose a trade" screen only prints a rule-check
+decision card — it places nothing. Values that would require live market data
+are reported as **unavailable rather than simulated**.
 
 **This is a personal research and simulation aid. It is not investment advice.**
 
@@ -71,9 +76,14 @@ environment and Node dependencies.
 
 ### 2. Build the web UI and start the local server
 
+Both commands are run **from the repository root**. First build the frontend
+(the backend serves the built files):
+
 ```bash
-cd frontend && npm install && npm run build
+npm --prefix frontend install && npm --prefix frontend run build
 ```
+
+Then start the local server — it keeps running in this terminal:
 
 ```bash
 cd agent && python -m cli serve --host 127.0.0.1 --port 8899
@@ -94,7 +104,8 @@ sample and says so.
 Export your IBKR **Activity Statement (CSV)** and save it as
 `data/private/ibkr_statement.csv`. That whole directory is git-ignored, so your
 real data never enters version control. Reload the page, or run a read-only
-review from the CLI:
+review from the CLI — in a **new terminal, from the repository root**, since the
+server above is still running:
 
 ```bash
 cd agent && python -m cli options-studio review --file ../data/private/ibkr_statement.csv

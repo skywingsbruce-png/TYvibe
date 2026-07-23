@@ -13,9 +13,12 @@ extended with three local, read-only modules I use for my own research:
 
 * This is a **personal research and simulation aid**. It is **not** investment
   advice, not a recommendation, and not a professional risk system.
-* It is **read-only**. There is **no automatic order placement** — no broker
-  connector is wired to trade, and a fail-closed guard (`options_studio/guard.py`)
-  refuses to run if a real-trading toggle is ever set.
+* The three workbench modules above are **read-only**, with **no automatic order
+  placement**: they connect to no broker for order entry and never route or
+  modify an order, and a fail-closed guard (`options_studio/guard.py`) refuses to
+  run if a real-trading toggle is ever set. Other capabilities that may exist in
+  the upstream general-purpose platform are outside this workbench's scope and
+  should not be configured for real trading.
 * The "propose a trade" screen is a **pre-trade rule check on a hypothetical
   trade**. It evaluates and prints a decision card. It never places, routes, or
   modifies an order.
